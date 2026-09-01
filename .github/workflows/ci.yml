@@ -1,0 +1,61 @@
+# Portal-only CI. Do not copy this file to application repos (e.g. AI_Studio_Main).
+# Application repos should only have: .github/workflows/release-build.yml
+name: Portal CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  backend:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: probe
+        run: |
+          if [ -f backend/requirements.txt ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping Portal CI backend tests (backend/ not found)."
+          fi
+      - if: steps.probe.outputs.ok == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - if: steps.probe.outputs.ok == 'true'
+        working-directory: backend
+        run: python -m pip install -r requirements.txt
+      - if: steps.probe.outputs.ok == 'true'
+        working-directory: backend
+        run: python -m pytest -q
+
+  frontend:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: probe
+        run: |
+          if [ -f frontend/package-lock.json ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping Portal CI frontend build (frontend/ not found)."
+          fi
+      - if: steps.probe.outputs.ok == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - if: steps.probe.outputs.ok == 'true'
+        working-directory: frontend
+        run: npm ci
+      - if: steps.probe.outputs.ok == 'true'
+        working-directory: frontend
+        run: npm run build

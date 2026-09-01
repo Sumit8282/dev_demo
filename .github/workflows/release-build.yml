@@ -1,0 +1,38 @@
+# Copy this file into the application repo (the PR repo), not only this portal.
+# Path in that repo: .github/workflows/release-build.yml
+name: Release build
+
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      release_id:
+        description: Portal release ID
+        required: false
+        type: string
+      release_version:
+        description: Release version
+        required: false
+        type: string
+      environment:
+        description: Target environment
+        required: false
+        type: string
+
+jobs:
+  build:
+    name: Generate release build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Record build metadata
+        run: |
+          echo "release_id=${{ inputs.release_id || 'n/a (push — no portal inputs)' }}"
+          echo "release_version=${{ inputs.release_version || github.ref_name }}"
+          echo "environment=${{ inputs.environment || 'n/a' }}"
+          echo "event=${{ github.event_name }}"
+          echo "branch=${{ github.ref_name }}"
+          echo "commit=${{ github.sha }}"
+          echo "run_id=${{ github.run_id }}"
+          echo "repository=${{ github.repository }}"

@@ -1,0 +1,35 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./backend/.env
+    environment:
+      APP_ENV: production
+      PORTAL_BASE_URL: http://localhost:5173
+      RELEASE_DATABASE_PATH: /app/db/releases.db
+    volumes:
+      - release-data:/app/db
+      - qa-uploads:/app/uploads
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: ""
+        VITE_AZURE_AD_CLIENT_ID: ${VITE_AZURE_AD_CLIENT_ID:-}
+        VITE_AZURE_AD_TENANT_ID: ${VITE_AZURE_AD_TENANT_ID:-}
+        VITE_AZURE_AD_REDIRECT_URI: ${VITE_AZURE_AD_REDIRECT_URI:-http://localhost:5173}
+        VITE_AZURE_AD_POST_LOGOUT_REDIRECT_URI: ${VITE_AZURE_AD_POST_LOGOUT_REDIRECT_URI:-http://localhost:5173/login}
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  release-data:
+  qa-uploads:

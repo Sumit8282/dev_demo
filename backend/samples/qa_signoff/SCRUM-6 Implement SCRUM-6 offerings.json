@@ -1,0 +1,10 @@
+{
+  "pr_title": "SCRUM-6: Implement SCRUM-6 offerings",
+  "test_plan_status": "Passed",
+  "open_blocker_or_critical_bugs": false,
+  "pr_tags": [
+    "regression",
+    "offerings"
+  ],
+  "summary": "Verified Offerings dropdown navigation fix in UAT. Regression suite passed."
+}

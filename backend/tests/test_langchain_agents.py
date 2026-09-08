@@ -33,11 +33,16 @@ def _fake_llm():
 def test_jira_and_qa_are_langchain_agents():
     settings = _llm_settings()
     jira = JiraAgent(settings=settings).build_langchain_agent(llm=_fake_llm())
-    qa = QAAgent(settings=settings).build_langchain_agent(llm=_fake_llm())
+    qa_agent = QAAgent(settings=settings)
+    qa = qa_agent.build_langchain_agent(llm=_fake_llm())
+    qa_ac = qa_agent.build_ac_extract_agent(llm=_fake_llm())
+    qa_tc = qa_agent.build_tc_extract_agent(llm=_fake_llm())
     assert jira is not None
     assert qa is not None
-    assert hasattr(jira, "ainvoke")
-    assert hasattr(qa, "ainvoke")
+    assert qa_ac is not None
+    assert qa_tc is not None
+    for compiled in (jira, qa, qa_ac, qa_tc):
+        assert hasattr(compiled, "ainvoke")
 
 
 def test_orchestrator_l3_merge_rm_are_langchain_agents():

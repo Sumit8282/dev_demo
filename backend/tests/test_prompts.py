@@ -26,9 +26,22 @@ def test_load_qa_agent_prompts():
     system = load_prompt("qa_agent_system")
     user = load_prompt("qa_agent_user")
     assert "Acceptance Criteria" in system
-    assert "{qa_document_text}" in user
+    assert "{test_cases}" in user
     assert "{jira_issue_key}" in user
     assert "{acceptance_criteria}" in user
+    assert "{signoff_facts}" in user
+    assert "intent, not keyword" in system.lower() or "not keyword" in system.lower()
+
+
+def test_load_qa_hybrid_extract_prompts():
+    ac_system = load_prompt("qa_ac_extract_system")
+    ac_user = load_prompt("qa_ac_extract_user")
+    tc_system = load_prompt("qa_tc_extract_system")
+    tc_user = load_prompt("qa_tc_extract_user")
+    assert "Acceptance Criterion" in ac_system
+    assert "{jira_description}" in ac_user
+    assert "test case" in tc_system.lower()
+    assert "{qa_document_text}" in tc_user
 
 
 def test_format_prompt_substitutes_placeholders():

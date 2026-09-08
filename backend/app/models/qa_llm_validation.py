@@ -7,6 +7,27 @@ from pydantic import BaseModel, Field
 from app.models.validation import ValidationStatus
 
 
+class QAAcceptanceCriterion(BaseModel):
+    ac_id: str
+    text: str
+
+
+class QAAcceptanceCriteriaExtract(BaseModel):
+    acceptance_criteria: list[QAAcceptanceCriterion] = Field(default_factory=list)
+    no_acceptance_criteria_found: bool = False
+
+
+class QATestCase(BaseModel):
+    test_case_id: str
+    scenario: str = ""
+    expected_result: str = ""
+    status: str = ""
+
+
+class QATestCaseExtract(BaseModel):
+    test_cases: list[QATestCase] = Field(default_factory=list)
+
+
 class QACoverageMatrixRow(BaseModel):
     ac_id: str
     acceptance_criterion: str

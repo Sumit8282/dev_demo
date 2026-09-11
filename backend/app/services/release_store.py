@@ -235,6 +235,7 @@ class ReleaseStore:
             jira_issue_key=state["jira_issue_key"],
             qa_signoff_required=state["qa_signoff_required"],
             qa_signoff_not_required_reason=state.get("qa_signoff_not_required_reason"),
+            qa_mode=state.get("qa_mode"),
             qa_signoff_attachment=self._serialize_attachment(state.get("qa_signoff_attachment")),
             environment=state["environment"],
             release_date=state["release_date"],

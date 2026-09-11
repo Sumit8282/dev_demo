@@ -15,6 +15,9 @@ from app.mcp.jira_mcp import JiraMCPClient
 from app.models.qa_llm_validation import (
     QAAcceptanceCriteriaExtract,
     QAAcceptanceCriterion,
+    QADraftTestBundle,
+    QAGeneratedTest,
+    QAGeneratedTestBundle,
     QALLMValidationOutput,
     QATestCase,
     QATestCaseExtract,
@@ -29,6 +32,20 @@ from app.services.qa_coverage_evaluator import (
     merge_test_cases,
     normalize_test_result,
 )
+from app.services.generated_test_runner import GeneratedTestRunner
+from app.services.generated_test_source import build_generated_test_code
+from app.services.github_repo_evidence import GitHubRepoEvidenceClient
+from app.services.qa_pr_test_gate import (
+    build_pr_test_document,
+    changed_production_files,
+    collect_pr_test_files,
+    extract_github_metadata,
+    extract_pr_testing_writeup,
+    format_generated_test_repo_context,
+    format_lane2_comment,
+    merge_test_files,
+    uncovered_acceptance_criteria,
+)
 from app.services.qa_signoff_service import QASignoffService, get_qa_signoff_service
 
 logger = logging.getLogger(__name__)
@@ -40,10 +57,16 @@ class QAAgent:
         signoff_service: QASignoffService | None = None,
         settings: Settings | None = None,
         jira_client: JiraMCPClient | None = None,
+        repo_evidence_client: GitHubRepoEvidenceClient | None = None,
+        generated_test_runner: GeneratedTestRunner | None = None,
     ) -> None:
         self.settings = settings or get_settings()
         self.signoff_service = signoff_service or get_qa_signoff_service()
         self._jira_client = jira_client
+        self._repo_evidence_client = repo_evidence_client
+        self._generated_test_runner = generated_test_runner or GeneratedTestRunner(
+            settings=self.settings
+        )
 
     async def validate_async(
         self,
@@ -57,6 +80,8 @@ class QAAgent:
         qa_signoff_attachment: dict | None = None,
         jira_issue_key: str | None = None,
         jira_validation: Any | None = None,
+        qa_mode: str | None = None,
+        github_validation: Any | None = None,
     ) -> QAValidationResult:
         logger.info(
             "[QA_AGENT] Starting sign-off validation for release %s (required=%s)",
@@ -64,14 +89,29 @@ class QAAgent:
             qa_signoff_required,
         )
 
-        if not qa_signoff_required:
+        resolved_mode = (qa_mode or ("not_required" if not qa_signoff_required else "upload")).strip().lower()
+
+        if not qa_signoff_required or resolved_mode == "not_required":
             result = self.signoff_service.validate_not_required(
                 qa_signoff_not_required_reason=qa_signoff_not_required_reason,
             )
             result.metadata.setdefault("environment", environment)
             result.metadata.setdefault("release_version", release_version)
+            result.metadata.setdefault("qa_mode", "not_required")
             logger.info("[QA_AGENT] Sign-off validation result: %s", result.status.value)
             return result
+
+        if resolved_mode == "pr_tests":
+            return await self._validate_pr_tests(
+                release_id=release_id,
+                environment=environment,
+                release_version=release_version,
+                qa_signoff_required=qa_signoff_required,
+                pr_title=pr_title,
+                jira_issue_key=jira_issue_key,
+                jira_validation=jira_validation,
+                github_validation=github_validation,
+            )
 
         checks = QAChecks(signoff_required=True, signoff_completed=False)
         metadata: dict[str, Any] = {
@@ -80,6 +120,8 @@ class QAAgent:
             "expected_pr_title": pr_title or "",
             "jira_issue_key": jira_issue_key or "",
             "hybrid_pipeline": True,
+            "qa_mode": "upload",
+            "qa_lane": 1,
         }
 
         if not qa_signoff_attachment or not qa_signoff_attachment.get("filename"):
@@ -230,14 +272,402 @@ class QAAgent:
             acceptance_criteria=extracted_acs,
             test_cases=extracted_tests,
             signoff=signoff,
-        )
+            )
 
-        return _to_qa_validation_result(
+        result = _to_qa_validation_result(
             llm_result,
             checks=checks,
             metadata=metadata,
             provided_acceptance_criteria=[item.text for item in extracted_acs],
         )
+        github_meta = extract_github_metadata(github_validation)
+        await self._attach_generated_tests(
+            result,
+            acceptance_criteria=extracted_acs,
+            existing_tests=qa_document_text,
+            jira_issue_key=jira_issue_key,
+            head_sha=str(github_meta.get("head_sha") or ""),
+            owner=str(github_meta.get("owner") or ""),
+            repo=str(github_meta.get("repo") or ""),
+        )
+        return result
+
+    async def _validate_pr_tests(
+        self,
+        *,
+        release_id: str,
+        environment: str,
+        release_version: str,
+        qa_signoff_required: bool,
+        pr_title: str | None,
+        jira_issue_key: str | None,
+        jira_validation: Any | None,
+        github_validation: Any | None,
+    ) -> QAValidationResult:
+        checks = QAChecks(signoff_required=True, signoff_completed=False)
+        github_meta = extract_github_metadata(github_validation)
+        head_sha = str(github_meta.get("head_sha") or "")
+        pr_test_files = collect_pr_test_files(github_validation)
+        testing_writeup = extract_pr_testing_writeup(github_validation)
+        repo_evidence = await self._collect_repo_evidence(github_validation)
+        repo_test_files = list(repo_evidence.get("repo_test_files") or [])
+        ci_status = str(repo_evidence.get("ci_status") or "")
+        test_files = merge_test_files(pr_test_files, repo_test_files)
+        qa_document_text = build_pr_test_document(
+            pr_test_files,
+            head_sha=head_sha,
+            repo_test_files=repo_test_files,
+            testing_writeup=testing_writeup,
+            ci_status=ci_status,
+        )
+        metadata: dict[str, Any] = {
+            "environment": environment,
+            "release_version": release_version,
+            "expected_pr_title": pr_title or "",
+            "jira_issue_key": jira_issue_key or "",
+            "hybrid_pipeline": True,
+            "qa_mode": "pr_tests",
+            "qa_lane": 1,
+            "head_sha": head_sha,
+            "pr_test_files": [item["filename"] for item in pr_test_files],
+            "pr_test_file_count": len(pr_test_files),
+            "repo_test_files": [item["filename"] for item in repo_test_files],
+            "repo_test_file_count": len(repo_test_files),
+            "testing_writeup_used": bool(testing_writeup),
+            "ci_status": ci_status,
+            "qa_document_text_length": len(qa_document_text),
+        }
+        logger.info(
+            "[QA_AGENT] Lane 1 real-data gate for %s sha=%s pr_tests=%d repo_tests=%d writeup=%s ci=%s",
+            release_id,
+            head_sha or "(none)",
+            len(pr_test_files),
+            len(repo_test_files),
+            "yes" if testing_writeup else "no",
+            ci_status or "none",
+        )
+
+        if not self.settings.llm_enabled:
+            return QAValidationResult(
+                status=ValidationStatus.ERROR,
+                checks=checks,
+                errors=[
+                    "LLM is not configured. Set LLM_PROVIDER, LLM_MODEL, LLM_API_KEY, and LLM_BASE_URL."
+                ],
+                metadata=metadata,
+            )
+
+        mapper_agent = self.build_langchain_agent()
+        tc_agent = self.build_tc_extract_agent()
+        if mapper_agent is None or tc_agent is None:
+            return QAValidationResult(
+                status=ValidationStatus.ERROR,
+                checks=checks,
+                errors=["Failed to initialize QA LLM agent."],
+                metadata=metadata,
+            )
+
+        jira_description, jira_comments, acceptance_criteria = _extract_jira_context(
+            jira_validation
+        )
+        if not acceptance_criteria and jira_issue_key:
+            fetched_description, fetched_comments, fetched_acs = (
+                await self._prefetch_jira_acceptance_criteria(jira_issue_key)
+            )
+            acceptance_criteria = fetched_acs
+            jira_description = jira_description or fetched_description
+            jira_comments = jira_comments or fetched_comments
+
+        ac_resolution, tc_extract = await asyncio.gather(
+            self._resolve_acceptance_criteria(
+                provided=acceptance_criteria,
+                jira_issue_key=jira_issue_key,
+                jira_description=jira_description,
+                jira_comments=jira_comments,
+            ),
+            self._extract_test_cases(
+                agent=tc_agent,
+                attachment_filename="pr-tests",
+                qa_document_text=qa_document_text,
+            ),
+        )
+        if ac_resolution is None:
+            return QAValidationResult(
+                status=ValidationStatus.ERROR,
+                checks=checks,
+                errors=["QA AC extract agent did not return structured acceptance criteria."],
+                metadata=metadata,
+            )
+        if tc_extract is None:
+            return QAValidationResult(
+                status=ValidationStatus.ERROR,
+                checks=checks,
+                errors=["QA test-case extract agent did not return structured test cases."],
+                metadata=metadata,
+            )
+
+        extracted_acs, ac_source = ac_resolution
+        extracted_tests = merge_test_cases(
+            extract_test_cases_from_text(qa_document_text),
+            tc_extract.test_cases,
+        )
+        metadata["ac_source"] = ac_source
+        metadata["extracted_test_case_count"] = len(extracted_tests)
+
+        llm_result = await self._map_coverage(
+            agent=mapper_agent,
+            release_id=release_id,
+            environment=environment,
+            release_version=release_version,
+            qa_signoff_required=qa_signoff_required,
+            pr_title=pr_title,
+            jira_issue_key=jira_issue_key,
+            attachment_filename="pr-tests",
+            acceptance_criteria=extracted_acs,
+            test_cases=extracted_tests,
+            signoff=None,
+        )
+        if llm_result is None:
+            return QAValidationResult(
+                status=ValidationStatus.ERROR,
+                checks=checks,
+                errors=["QA LLM agent did not return a structured validation result."],
+                metadata=metadata,
+            )
+
+        llm_result = apply_coverage_constraints(
+            llm_result,
+            acceptance_criteria=extracted_acs,
+            test_cases=extracted_tests,
+            signoff=None,
+        )
+        if ci_status.lower() == "failure":
+            llm_result.status = ValidationStatus.FAIL
+            if not any("ci" in error.lower() or "check" in error.lower() for error in llm_result.errors):
+                llm_result.errors.append(
+                    f"GitHub checks for SHA {head_sha or 'unknown'} did not pass ({ci_status})."
+                )
+        result = _to_qa_validation_result(
+            llm_result,
+            checks=checks,
+            metadata=metadata,
+            provided_acceptance_criteria=[item.text for item in extracted_acs],
+        )
+        await self._attach_generated_tests(
+            result,
+            acceptance_criteria=extracted_acs,
+            existing_tests=qa_document_text,
+            jira_issue_key=jira_issue_key,
+            head_sha=head_sha,
+            owner=str(github_meta.get("owner") or ""),
+            repo=str(github_meta.get("repo") or ""),
+            repo_files=format_generated_test_repo_context(
+                source_files=list(repo_evidence.get("source_files") or []),
+                changed_files=changed_production_files(github_validation),
+                source_excerpt=str(repo_evidence.get("source_excerpt") or ""),
+            ),
+        )
+        if result.status != ValidationStatus.PASS:
+            await self._attach_lane2_drafts(
+                result,
+                acceptance_criteria=extracted_acs,
+                uncovered=uncovered_acceptance_criteria(llm_result.coverage_matrix),
+                existing_tests=qa_document_text,
+                jira_issue_key=jira_issue_key,
+                head_sha=head_sha,
+            )
+        return result
+
+    async def _collect_repo_evidence(self, github_validation: Any | None) -> dict[str, Any]:
+        empty = {"repo_test_files": [], "source_files": [], "source_excerpt": "", "ci_status": ""}
+        client = self._repo_evidence_client
+        if client is None:
+            token = ""
+            try:
+                raw = self.settings.github_personal_access_token.get_secret_value()
+                token = raw.strip() if isinstance(raw, str) else ""
+            except Exception:
+                token = ""
+            if not token:
+                return empty
+            client = GitHubRepoEvidenceClient(settings=self.settings)
+            self._repo_evidence_client = client
+        try:
+            return await client.collect_lane1_evidence(github_validation)
+        except Exception as exc:
+            logger.warning("[QA_AGENT] Repo evidence collection failed: %s", exc)
+            return empty
+
+    async def _attach_generated_tests(
+        self,
+        result: QAValidationResult,
+        *,
+        acceptance_criteria: list[QAAcceptanceCriterion],
+        existing_tests: str,
+        jira_issue_key: str | None,
+        head_sha: str,
+        owner: str = "",
+        repo: str = "",
+        repo_files: str = "",
+    ) -> None:
+        if not acceptance_criteria:
+            result.metadata["generated_tests"] = []
+            return
+        bundle = await self._generate_executable_tests(
+            acceptance_criteria=acceptance_criteria,
+            existing_tests=existing_tests,
+            jira_issue_key=jira_issue_key,
+            head_sha=head_sha,
+            repo_files=repo_files,
+        )
+        for item in bundle.tests:
+            criterion = next(
+                (row for row in acceptance_criteria if row.ac_id == item.ac_id),
+                None,
+            )
+            if criterion is None:
+                continue
+            item.test_file = f"tests/generated/{criterion.ac_id.lower()}_test.py"
+            item.test_code = build_generated_test_code(criterion, repo_files)
+        result.metadata["generated_tests_repo"] = f"{owner}/{repo}".strip("/") if owner and repo else ""
+        result.metadata["generated_tests_sha"] = head_sha
+        try:
+            executed = await self._generated_test_runner.run(
+                bundle.tests,
+                owner=owner,
+                repo=repo,
+                sha=head_sha,
+            )
+        except Exception as exc:
+            logger.warning("[QA_AGENT] Generated test runner failed: %s", exc)
+            executed = bundle.tests
+            for item in executed:
+                if item.status.upper() not in {"PASS", "FAIL"}:
+                    item.status = "FAIL"
+                if not item.reason:
+                    item.reason = f"Could not execute generated test: {exc}"
+        result.metadata["generated_tests"] = [
+            item.model_dump(exclude={"test_code"}) for item in executed
+        ]
+        result.metadata["generated_test_count"] = len(executed)
+        result.metadata["generated_test_pass_count"] = sum(
+            1 for item in executed if item.status.upper() == "PASS"
+        )
+
+    async def _generate_executable_tests(
+        self,
+        *,
+        acceptance_criteria: list[QAAcceptanceCriterion],
+        existing_tests: str,
+        jira_issue_key: str | None,
+        head_sha: str,
+        repo_files: str = "",
+    ) -> QAGeneratedTestBundle:
+        empty = QAGeneratedTestBundle()
+        try:
+            agent = self.build_generated_test_agent()
+        except Exception as exc:
+            logger.warning("[QA_AGENT] Generated test agent init failed: %s", exc)
+            return empty
+        if agent is None:
+            return empty
+        criteria_text = "\n".join(
+            f"- {item.ac_id}: {item.text}" for item in acceptance_criteria
+        )
+        user_message = format_prompt(
+            "qa_generated_test_user",
+            jira_issue_key=(jira_issue_key or "").strip() or "(not provided)",
+            head_sha=head_sha or "(unknown)",
+            acceptance_criteria=criteria_text,
+            existing_tests=(existing_tests or "")[:12000],
+            repo_files=(repo_files or "")[:8000] or "(no source file list)",
+        )
+        result = await invoke_structured_agent(
+            agent,
+            user_message=user_message,
+            response_model=QAGeneratedTestBundle,
+        )
+        if result is None:
+            return empty
+        by_id = {item.ac_id.strip().upper(): item for item in result.tests if item.ac_id}
+        aligned: list[QAGeneratedTest] = []
+        for criterion in acceptance_criteria:
+            key = criterion.ac_id.strip().upper()
+            item = by_id.get(key) or QAGeneratedTest(
+                ac_id=criterion.ac_id,
+                generated_test=f"test_{criterion.ac_id.lower().replace('-', '_')}",
+                test_file="tests/test_generated.py",
+                summary=f"Generated test for {criterion.ac_id}.",
+                status="FAIL",
+                reason="Generator omitted this acceptance criterion.",
+            )
+            item.ac_id = criterion.ac_id
+            aligned.append(item)
+        return QAGeneratedTestBundle(tests=aligned)
+
+    async def _attach_lane2_drafts(
+        self,
+        result: QAValidationResult,
+        *,
+        acceptance_criteria: list[QAAcceptanceCriterion],
+        uncovered: list,
+        existing_tests: str,
+        jira_issue_key: str | None,
+        head_sha: str,
+    ) -> None:
+        bundle = await self._generate_lane2_drafts(
+            uncovered=uncovered,
+            existing_tests=existing_tests,
+            jira_issue_key=jira_issue_key,
+            head_sha=head_sha,
+        )
+        drafts = [item.model_dump() for item in bundle.drafts]
+        result.metadata["qa_lane"] = 2
+        result.metadata["lane2_optional"] = True
+        result.metadata["lane2_developer_instructions"] = bundle.developer_instructions
+        result.metadata["lane2_draft_tests"] = drafts
+        result.metadata["lane2_comment"] = format_lane2_comment(
+            head_sha=head_sha,
+            uncovered=uncovered,
+            drafts=bundle.drafts,
+        )
+        if not uncovered and acceptance_criteria:
+            result.metadata["lane2_note"] = (
+                "Lane 1 failed. Generate or commit tests, then re-run the release "
+                "so Lane 1 checks the new SHA."
+            )
+
+    async def _generate_lane2_drafts(
+        self,
+        *,
+        uncovered: list,
+        existing_tests: str,
+        jira_issue_key: str | None,
+        head_sha: str,
+    ) -> QADraftTestBundle:
+        empty = QADraftTestBundle()
+        if not uncovered:
+            return empty
+        agent = self.build_lane2_draft_agent()
+        if agent is None:
+            return empty
+        uncovered_text = "\n".join(
+            f"- {row.ac_id}: {row.acceptance_criterion} ({row.coverage})"
+            for row in uncovered
+        )
+        user_message = format_prompt(
+            "qa_lane2_draft_user",
+            jira_issue_key=(jira_issue_key or "").strip() or "(not provided)",
+            head_sha=head_sha or "(unknown)",
+            uncovered_criteria=uncovered_text,
+            existing_tests=existing_tests[:12000],
+        )
+        result = await invoke_structured_agent(
+            agent,
+            user_message=user_message,
+            response_model=QADraftTestBundle,
+        )
+        return result or empty
 
     async def _resolve_acceptance_criteria(
         self,
@@ -405,6 +835,26 @@ class QAAgent:
             system_prompt=load_prompt("qa_agent_system"),
             name="qa_agent",
             response_format=QALLMValidationOutput,
+            llm=llm,
+        )
+
+    def build_lane2_draft_agent(self, llm: BaseChatModel | None = None):
+        return create_langchain_agent(
+            settings=self.settings,
+            tools=[],
+            system_prompt=load_prompt("qa_lane2_draft_system"),
+            name="qa_lane2_draft_agent",
+            response_format=QADraftTestBundle,
+            llm=llm,
+        )
+
+    def build_generated_test_agent(self, llm: BaseChatModel | None = None):
+        return create_langchain_agent(
+            settings=self.settings,
+            tools=[],
+            system_prompt=load_prompt("qa_generated_test_system"),
+            name="qa_generated_test_agent",
+            response_format=QAGeneratedTestBundle,
             llm=llm,
         )
 

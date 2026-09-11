@@ -147,6 +147,7 @@ export interface BackendReleaseState {
   jira_issue_key: string;
   qa_signoff_required: boolean;
   qa_signoff_not_required_reason: string | null;
+  qa_mode?: 'not_required' | 'upload' | 'pr_tests' | null;
   qa_signoff_attachment: QASignoffAttachmentInfo | null;
   environment: string;
   release_date: string;
@@ -206,7 +207,11 @@ export async function createReleaseApi(
   formData.append('release_branch', form.releaseBranch.trim());
   formData.append('github_pr_url', form.pr.trim());
   formData.append('jira_url', form.jira.trim());
-  formData.append('qa_signoff_required', form.qaSignOff === 'Yes' ? 'true' : 'false');
+  formData.append('qa_signoff_required', form.qaSignOff === 'No' ? 'false' : 'true');
+  formData.append(
+    'qa_mode',
+    form.qaSignOff === 'No' ? 'not_required' : form.qaSignOff === 'PrTests' ? 'pr_tests' : 'upload'
+  );
   formData.append('environment', form.environment.trim());
   formData.append('release_date', form.releaseDate);
   formData.append('created_by', createdBy);
@@ -215,7 +220,7 @@ export async function createReleaseApi(
     formData.append('qa_signoff_not_required_reason', form.qaReason.trim());
   }
 
-  if (form.qaSignOff === 'Yes' && form.qaSignOffAttachment) {
+  if (form.qaSignOff === 'Upload' && form.qaSignOffAttachment) {
     formData.append('qa_signoff_attachment', form.qaSignOffAttachment);
   }
 

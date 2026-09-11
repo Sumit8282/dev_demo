@@ -42,6 +42,7 @@ from app.utils.github_fields import (
     build_pull_request_change_stats,
     extract_pr_author,
     extract_pr_description,
+    extract_pr_head_sha,
     extract_pr_merged,
     extract_pr_number,
     extract_pr_state,
@@ -205,6 +206,9 @@ class Orchestrator:
             metadata["raised_by"] = pr_author
         if pr_description:
             metadata["pr_description"] = pr_description
+        head_sha = extract_pr_head_sha(pr_data)
+        if head_sha:
+            metadata["head_sha"] = head_sha
 
         checks.pr_exists = pr_exists(pr_data)
         if ctx:
@@ -748,6 +752,7 @@ class Orchestrator:
         *,
         pr_title: str | None = None,
         jira_validation: JiraValidationResult | dict | None = None,
+        github_validation: GitHubValidationResult | dict | None = None,
         ctx: WorkflowRunContext | None = None,
     ) -> QAValidationResult:
         result = await self.qa_agent.validate_async(
@@ -760,17 +765,31 @@ class Orchestrator:
             qa_signoff_attachment=state.get("qa_signoff_attachment"),
             jira_issue_key=state.get("jira_issue_key"),
             jira_validation=jira_validation or state.get("jira_validation"),
+            qa_mode=state.get("qa_mode"),
+            github_validation=(
+                github_validation
+                or (ctx.github_validation if ctx else None)
+                or state.get("github_validation")
+            ),
         )
         if ctx:
             checks = result.checks
             if checks.signoff_required:
+                qa_mode = (result.metadata or {}).get("qa_mode") or "upload"
+                if qa_mode == "pr_tests":
+                    check_message = (
+                        f"Lane 1 PR test coverage (sha={(result.metadata or {}).get('head_sha') or 'unknown'}) — "
+                        f"{'PASS' if checks.signoff_completed else 'FAIL'}"
+                    )
+                else:
+                    check_message = (
+                        f"QA sign-off attachment validated — "
+                        f"{'PASS' if checks.signoff_completed else 'FAIL'}"
+                    )
                 ctx.emit(
                     agent=WorkflowEventAgent.QA,
                     phase=WorkflowEventPhase.CHECK,
-                    message=(
-                        f"QA sign-off attachment validated — "
-                        f"{'PASS' if checks.signoff_completed else 'FAIL'}"
-                    ),
+                    message=check_message,
                     metadata={"check": "signoff_completed", "passed": checks.signoff_completed},
                 )
             else:
@@ -883,6 +902,10 @@ class Orchestrator:
             "Release workflow has been HALTED.\n\n"
             "L3 approval will not be triggered."
         )
+        lane2 = (qa_result.metadata or {}).get("lane2_comment")
+        if isinstance(lane2, str) and lane2.strip():
+            body = f"{body}\n\n{lane2.strip()}"
+        return body
 
     async def post_github_failure_comment(
         self,

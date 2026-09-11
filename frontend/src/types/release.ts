@@ -32,6 +32,24 @@ export interface WorkflowActivity {
   remarks: string;
 }
 
+export interface QaCoverageRow {
+  acId: string;
+  source: string;
+  criterion: string;
+  coverage: string;
+  implementation: string;
+  reason: string;
+}
+
+export interface QaGeneratedTestRow {
+  acId: string;
+  generatedTest: string;
+  testFile: string;
+  summary: string;
+  reason: string;
+  status: 'PASS' | 'FAIL';
+}
+
 export interface Release {
   id: string;
   releaseBranch: string;
@@ -40,6 +58,7 @@ export interface Release {
   qaSignOff: string;
   qaReason: string;
   qaSignOffAttachmentName: string;
+  qaMode?: string;
   environment: string;
   releaseDate: string;
   status: string;
@@ -56,6 +75,11 @@ export interface Release {
   qaValidationStatus?: ValidationStatus | null;
   jiraValidationErrors?: string[];
   qaValidationErrors?: string[];
+  qaCoverageRows?: QaCoverageRow[];
+  qaCoveragePercent?: number | null;
+  qaGeneratedTests?: QaGeneratedTestRow[];
+  qaGeneratedTestsRepo?: string;
+  qaGeneratedTestsSha?: string;
 }
 
 export interface NewReleaseForm {
@@ -68,6 +92,8 @@ export interface NewReleaseForm {
   environment: string;
   releaseDate: string;
 }
+
+export type QaValidationChoice = 'No' | 'Upload' | 'PrTests';
 
 export const QA_SIGNOFF_ALLOWED_EXTENSIONS = [
   '.docx',

@@ -37,6 +37,36 @@ class QACoverageMatrixRow(BaseModel):
     evidence_reason: str = ""
 
 
+class QADraftTest(BaseModel):
+    ac_id: str
+    suggested_path: str = "tests/test_generated.py"
+    language: str = "python"
+    test_code: str
+    rationale: str = ""
+
+
+class QADraftTestBundle(BaseModel):
+    drafts: list[QADraftTest] = Field(default_factory=list)
+    developer_instructions: str = (
+        "Review these draft tests, commit the ones you accept to the PR, "
+        "then create the release again so Lane 1 re-runs against the new SHA."
+    )
+
+
+class QAGeneratedTest(BaseModel):
+    ac_id: str
+    generated_test: str = ""
+    test_file: str = "tests/test_generated.py"
+    summary: str = ""
+    reason: str = ""
+    status: str = "FAIL"
+    test_code: str = ""
+
+
+class QAGeneratedTestBundle(BaseModel):
+    tests: list[QAGeneratedTest] = Field(default_factory=list)
+
+
 class QALLMValidationOutput(BaseModel):
     status: ValidationStatus
     validation_summary: str = ""

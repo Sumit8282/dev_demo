@@ -14,7 +14,7 @@ const emptyForm: NewReleaseForm = {
   releaseBranch: '',
   pr: '',
   jira: '',
-  qaSignOff: '',
+  qaSignOff: 'PrTests',
   qaReason: '',
   qaSignOffAttachment: null,
   environment: '',
@@ -51,7 +51,12 @@ export default function NewReleaseModal({
     e.preventDefault();
     setAttachmentError(null);
 
-    if (form.qaSignOff === 'Yes' && !form.qaSignOffAttachment) {
+    if (!form.qaSignOff) {
+      setAttachmentError('Please choose a QA validation option.');
+      return;
+    }
+
+    if (form.qaSignOff === 'Upload' && !form.qaSignOffAttachment) {
       setAttachmentError('Please upload the QA sign-off document.');
       return;
     }
@@ -80,7 +85,7 @@ export default function NewReleaseModal({
       ...prev,
       qaSignOff: value,
       qaReason: value === 'No' ? prev.qaReason : '',
-      qaSignOffAttachment: value === 'Yes' ? prev.qaSignOffAttachment : null,
+      qaSignOffAttachment: value === 'Upload' ? prev.qaSignOffAttachment : null,
     }));
   };
 
@@ -159,17 +164,27 @@ export default function NewReleaseModal({
               />
             </div>
             <div className="form-group">
-              <span className="form-label">QA Sign-off Required</span>
-              <div className="radio-group" role="radiogroup" aria-label="QA Sign-off Required">
+              <span className="form-label">QA validation</span>
+              <div className="radio-group radio-group-stacked" role="radiogroup" aria-label="QA validation">
                 <label className="radio-option">
                   <input
                     type="radio"
                     name="qaSignOff"
-                    value="Yes"
-                    checked={form.qaSignOff === 'Yes'}
+                    value="Upload"
+                    checked={form.qaSignOff === 'Upload'}
                     onChange={(e) => handleQaSignOffChange(e.target.value)}
                   />
-                  <span>Yes</span>
+                  <span>Upload QA sign-off document</span>
+                </label>
+                <label className="radio-option">
+                  <input
+                    type="radio"
+                    name="qaSignOff"
+                    value="PrTests"
+                    checked={form.qaSignOff === 'PrTests'}
+                    onChange={(e) => handleQaSignOffChange(e.target.value)}
+                  />
+                  <span>Use live Jira + GitHub evidence (no document)</span>
                 </label>
                 <label className="radio-option">
                   <input
@@ -179,11 +194,11 @@ export default function NewReleaseModal({
                     checked={form.qaSignOff === 'No'}
                     onChange={(e) => handleQaSignOffChange(e.target.value)}
                   />
-                  <span>No</span>
+                  <span>Not required</span>
                 </label>
               </div>
             </div>
-            {form.qaSignOff === 'Yes' && (
+            {form.qaSignOff === 'Upload' && (
               <div className="form-group">
                 <label htmlFor="qaSignOffAttachment">QA Sign-off Attachment</label>
                 <input
@@ -203,6 +218,17 @@ export default function NewReleaseModal({
                     Selected: {form.qaSignOffAttachment.name}
                   </p>
                 )}
+              </div>
+            )}
+            {form.qaSignOff === 'PrTests' && (
+              <div className="form-group">
+                <p className="field-hint">
+                  No QA document needed. The agent uses the live Jira ticket plus this PR:
+                  test files in the diff, related tests already in the repo at the commit SHA,
+                  the PR Testing / verification write-up, and GitHub check status. If every
+                  AC is covered, QA passes. If not, Lane 2 drafts tests for a developer to
+                  review, commit, then create a new release.
+                </p>
               </div>
             )}
             {form.qaSignOff === 'No' && (

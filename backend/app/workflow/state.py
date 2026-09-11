@@ -23,6 +23,7 @@ class ReleaseState(TypedDict, total=False):
     jira_issue_key: str
     qa_signoff_required: bool
     qa_signoff_not_required_reason: str | None
+    qa_mode: str | None
     qa_signoff_attachment: dict[str, Any] | None
     environment: str
     release_date: date

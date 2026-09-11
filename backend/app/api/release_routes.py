@@ -34,6 +34,7 @@ from app.models.rm_approval import (
     RMApprovalStatus,
 )
 from app.models.release import (
+    QAMode,
     ReleaseCreateResponse,
     ReleaseRequest,
     ReleaseStateResponse,
@@ -423,6 +424,7 @@ def _build_initial_state(
         "jira_issue_key": jira_issue_key,
         "qa_signoff_required": request.qa_signoff_required,
         "qa_signoff_not_required_reason": request.qa_signoff_not_required_reason,
+        "qa_mode": (request.qa_mode or QAMode.NOT_REQUIRED).value,
         "qa_signoff_attachment": attachment_state,
         "environment": request.environment,
         "release_date": request.release_date,
@@ -458,6 +460,7 @@ async def _parse_multipart_request(
             jira_url=str(form.get("jira_url", "")),
             qa_signoff_required=str(form.get("qa_signoff_required", "false")).lower() in {"true", "1", "yes"},
             qa_signoff_not_required_reason=form.get("qa_signoff_not_required_reason") or None,
+            qa_mode=form.get("qa_mode") or None,
             environment=str(form.get("environment", "")),
             release_date=date.fromisoformat(str(form.get("release_date", ""))),
             created_by=form.get("created_by") or None,
@@ -484,16 +487,17 @@ async def create_release(
     else:
         release_request, qa_signoff_attachment = await _parse_json_request(request)
 
-    if release_request.qa_signoff_required:
+    qa_mode = release_request.qa_mode or QAMode.NOT_REQUIRED
+    if qa_mode == QAMode.UPLOAD:
         if qa_signoff_attachment is None or not qa_signoff_attachment.filename:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="QA sign-off attachment is required when qa_signoff_required is true.",
+                detail="QA sign-off attachment is required when QA mode is upload.",
             )
     elif qa_signoff_attachment is not None and qa_signoff_attachment.filename:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="QA sign-off attachment should only be provided when qa_signoff_required is true.",
+            detail="QA sign-off attachment is only used for the upload option.",
         )
 
     try:

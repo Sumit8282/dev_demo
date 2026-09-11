@@ -66,6 +66,22 @@ def extract_target_branch(pr_data: dict[str, Any]) -> str | None:
     return None
 
 
+def extract_pr_head_sha(pr_data: dict[str, Any]) -> str | None:
+    """Extract the PR head commit SHA from a GitHub MCP pull request payload."""
+    for node in _walk_dicts(pr_data):
+        for key in ("head_sha", "headSha", "headSHA"):
+            value = node.get(key)
+            if isinstance(value, str) and len(value.strip()) >= 7:
+                return value.strip()
+        head = node.get("head")
+        if isinstance(head, dict):
+            for key in ("sha", "oid", "commit_sha"):
+                value = head.get(key)
+                if isinstance(value, str) and len(value.strip()) >= 7:
+                    return value.strip()
+    return None
+
+
 def extract_pr_title(pr_data: dict[str, Any]) -> str | None:
     for node in _walk_dicts(pr_data):
         title = node.get("title")
@@ -275,14 +291,16 @@ def parse_pull_request_files(files_data: Any) -> list[dict[str, int | str]]:
         filename = item.get("filename") or item.get("path") or item.get("file")
         if not isinstance(filename, str) or not filename.strip():
             continue
-        files.append(
-            {
-                "filename": filename.strip(),
-                "status": str(item.get("status") or "").strip(),
-                "additions": _coerce_non_negative_int(item.get("additions")) or 0,
-                "deletions": _coerce_non_negative_int(item.get("deletions")) or 0,
-            }
-        )
+        patch = item.get("patch") or item.get("diff") or ""
+        record: dict[str, int | str] = {
+            "filename": filename.strip(),
+            "status": str(item.get("status") or "").strip(),
+            "additions": _coerce_non_negative_int(item.get("additions")) or 0,
+            "deletions": _coerce_non_negative_int(item.get("deletions")) or 0,
+        }
+        if isinstance(patch, str) and patch.strip():
+            record["patch"] = patch.strip()[:20000]
+        files.append(record)
     return files
 
 

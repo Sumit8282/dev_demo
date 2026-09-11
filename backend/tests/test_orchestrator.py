@@ -111,8 +111,7 @@ def test_failure_comment_includes_all_validations(sample_state):
 @pytest.mark.asyncio
 async def test_github_comment_failure_not_reported_as_posted(sample_state):
     github_client = MagicMock()
-    github_client.tool_names = ["add_issue_comment"]
-    github_client.connect = AsyncMock()
+    github_client.tool_names = ["github_rest"]
     github_client.add_pull_request_comment = AsyncMock(
         side_effect=Exception("comment failed")
     )
@@ -122,3 +121,43 @@ async def test_github_comment_failure_not_reported_as_posted(sample_state):
     orchestrator = Orchestrator(github_client=github_client)
     posted = await orchestrator.post_github_failure_comment(sample_state, "test comment")
     assert posted is False
+
+
+@pytest.mark.asyncio
+async def test_github_comment_posts_via_rest(sample_state):
+    import httpx
+    from pydantic import SecretStr
+
+    from app.config import Settings
+    from app.services.github_pr_client import GitHubPRClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path.endswith("/issues/123/comments"):
+            return httpx.Response(201, json={"id": 99, "body": "test comment"})
+        return httpx.Response(404, text="missing")
+
+    rest_client = GitHubPRClient(
+        Settings(GITHUB_PERSONAL_ACCESS_TOKEN=SecretStr("test-token")),
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    orchestrator = Orchestrator(github_client=rest_client)
+    posted = await orchestrator.post_github_failure_comment(sample_state, "test comment")
+    assert posted is True
+
+
+def test_failure_comment_appends_lane2(sample_state):
+    orchestrator = Orchestrator()
+    qa = QAValidationResult(
+        status=ValidationStatus.FAIL,
+        checks=QAChecks(signoff_required=True, signoff_completed=False),
+        errors=["QA coverage failed"],
+        metadata={"lane2_comment": "Suggested test: cover AC-01 empty dropdown."},
+    )
+    comment = orchestrator.build_failure_comment(
+        sample_state,
+        _pass_github(),
+        JiraValidationResult(status=ValidationStatus.PASS, checks=JiraChecks()),
+        qa,
+        qa.errors,
+    )
+    assert "Suggested test: cover AC-01 empty dropdown." in comment

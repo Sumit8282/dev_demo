@@ -4,12 +4,17 @@ import {
   approveL3ReleaseApi,
   getL3ApprovalApi,
   getQaSignoffAttachmentUrl,
+  getReleaseApi,
   rejectL3ReleaseApi,
   type L3ApprovalRequestInfo,
 } from '../api/releases';
+import QaCoverageTable from '../components/QaCoverageTable';
+import QaGeneratedTestsTable from '../components/QaGeneratedTestsTable';
 import StatusBadge from '../components/StatusBadge';
 import { useAuth } from '../context/AuthContext';
 import { useReleases } from '../context/ReleaseContext';
+import type { QaCoverageRow, QaGeneratedTestRow, ValidationStatus } from '../types/release';
+import { mapQaCoverageRows, mapQaGeneratedTests } from '../utils/releaseMapper';
 
 export default function L3ApprovalDetails() {
   const { id } = useParams<{ id: string }>();
@@ -17,6 +22,13 @@ export default function L3ApprovalDetails() {
   const { user } = useAuth();
   const { updateReleaseFromBackend } = useReleases();
   const [approval, setApproval] = useState<L3ApprovalRequestInfo | null>(null);
+  const [qaCoverageRows, setQaCoverageRows] = useState<QaCoverageRow[]>([]);
+  const [qaGeneratedTests, setQaGeneratedTests] = useState<QaGeneratedTestRow[]>([]);
+  const [qaGeneratedTestsRepo, setQaGeneratedTestsRepo] = useState('');
+  const [qaGeneratedTestsSha, setQaGeneratedTestsSha] = useState('');
+  const [qaValidationStatus, setQaValidationStatus] = useState<ValidationStatus | null>(null);
+  const [qaCoveragePercent, setQaCoveragePercent] = useState<number | null>(null);
+  const [qaValidationErrors, setQaValidationErrors] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -43,6 +55,25 @@ export default function L3ApprovalDetails() {
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
+      });
+
+    getReleaseApi(id)
+      .then((state) => {
+        if (cancelled) return;
+        const metadata = state.qa_validation?.metadata;
+        const percent = metadata?.acceptance_criteria_coverage_percent;
+        setQaCoverageRows(mapQaCoverageRows(state));
+        setQaGeneratedTests(mapQaGeneratedTests(state));
+        setQaGeneratedTestsRepo(String(metadata?.generated_tests_repo ?? '').trim());
+        setQaGeneratedTestsSha(String(metadata?.generated_tests_sha ?? '').trim());
+        setQaValidationStatus(state.qa_validation?.status ?? null);
+        setQaCoveragePercent(typeof percent === 'number' ? percent : null);
+        setQaValidationErrors(state.qa_validation?.errors ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setQaCoverageRows([]);
+        }
       });
 
     return () => {
@@ -248,6 +279,19 @@ export default function L3ApprovalDetails() {
           </table>
         </div>
       </section>
+
+      <QaCoverageTable
+        rows={qaCoverageRows}
+        qaStatus={qaValidationStatus}
+        coveragePercent={qaCoveragePercent}
+        errors={qaValidationErrors}
+      />
+
+      <QaGeneratedTestsTable
+        rows={qaGeneratedTests}
+        repo={qaGeneratedTestsRepo}
+        sha={qaGeneratedTestsSha}
+      />
 
       {riskScore ? (
         <section className="detail-section">

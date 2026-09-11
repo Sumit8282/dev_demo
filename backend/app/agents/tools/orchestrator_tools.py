@@ -100,6 +100,7 @@ def build_orchestrator_tools(
             ctx.state,
             pr_title=pr_title,
             jira_validation=ctx.jira_validation,
+            github_validation=ctx.github_validation,
             ctx=ctx,
         )
         ctx.qa_validation = result

@@ -1,6 +1,6 @@
 import type { BackendReleaseState } from '../api/releases';
 import { BACKEND_POST_MERGE_STATUSES } from '../api/releases';
-import type { Release, StatusType, WorkflowActivity, WorkflowStep } from '../types/release';
+import type { QaCoverageRow, QaGeneratedTestRow, Release, StatusType, WorkflowActivity, WorkflowStep } from '../types/release';
 import type { WorkflowEvent } from '../types/workflowEvent';
 import { formatDate, formatTime } from './helpers';
 import { formatJiraValidationRemarks } from './jiraValidationMessages';
@@ -530,6 +530,166 @@ function mapWorkflowStatus(state: BackendReleaseState): {
   }
 }
 
+function qaMethodLabel(state: BackendReleaseState): string {
+  const mode = state.qa_mode;
+  if (mode === 'pr_tests') return 'Live Jira + GitHub evidence';
+  if (mode === 'upload') return 'Upload document';
+  if (mode === 'not_required' || !state.qa_signoff_required) return 'No';
+  return state.qa_signoff_required ? 'Yes' : 'No';
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+export function mapQaCoverageRows(state: BackendReleaseState): QaCoverageRow[] {
+  const qaMeta = asRecord(state.qa_validation?.metadata);
+  const githubMeta = asRecord(state.github_validation?.metadata);
+  const raw = qaMeta?.coverage_matrix;
+  if (!Array.isArray(raw)) return [];
+  const source = formatQaSource(state.qa_mode, qaMeta);
+  const implementationFiles = collectImplementationFiles(githubMeta);
+  return raw.flatMap((item) => {
+    const row = asRecord(item);
+    if (!row) return [];
+    const acId = String(row.ac_id ?? '').trim();
+    const criterion = String(row.acceptance_criterion ?? '').trim();
+    if (!acId && !criterion) return [];
+    const testCases = String(row.test_cases ?? '').trim();
+    const coverage = String(row.coverage ?? '').trim();
+    const testResult = String(row.test_result ?? '').trim();
+    const reason = String(row.evidence_reason ?? '').trim();
+    return [
+      {
+        acId,
+        source,
+        criterion,
+        coverage: formatQaCoverage(coverage, testResult, testCases, qaMeta),
+        implementation: formatQaImplementation(criterion, implementationFiles),
+        reason: reason || '-',
+      },
+    ];
+  });
+}
+
+function formatQaSource(
+  qaMode: BackendReleaseState['qa_mode'],
+  qaMeta: Record<string, unknown> | null
+): string {
+  if (qaMode === 'upload') return 'jira+qa_document';
+  if (qaMode === 'pr_tests') return 'jira+github';
+  const acSource = String(qaMeta?.ac_source ?? '').trim();
+  if (acSource) return `jira+${acSource}`;
+  return 'jira';
+}
+
+function formatQaCoverage(
+  coverage: string,
+  testResult: string,
+  testCases: string,
+  qaMeta: Record<string, unknown> | null
+): string {
+  const label = coverage.toLowerCase();
+  const result = testResult.toLowerCase();
+  let status = coverage || '-';
+  if (label === 'fully covered') status = 'COVERED';
+  else if (label === 'partially covered') status = 'PARTIAL';
+  else if (label === 'covered but failed') {
+    status = result.includes('fail')
+      ? 'INSUFFICIENT — generated test failed'
+      : 'INSUFFICIENT — test failed';
+  } else if (label === 'unable to determine') status = 'INSUFFICIENT — unable to determine';
+  else if (label === 'not covered') status = 'INSUFFICIENT — not covered';
+
+  const documentDetail = testCases
+    ? testCases
+    : qaMeta?.testing_writeup_used === true
+      ? 'PR Testing write-up'
+      : '';
+  return documentDetail ? `${status} (${documentDetail})` : status;
+}
+
+function collectImplementationFiles(githubMeta: Record<string, unknown> | null): string[] {
+  const files = githubMeta?.changed_files;
+  if (!Array.isArray(files)) return asStringList(githubMeta?.changed_file_names).filter((name) => !isLikelyTestFile(name));
+  return files.flatMap((item) => {
+    const row = asRecord(item);
+    const name = String(row?.filename ?? row?.path ?? '').trim();
+    if (!name || isLikelyTestFile(name)) return [];
+    return [name];
+  });
+}
+
+function formatQaImplementation(criterion: string, files: string[]): string {
+  if (!files.length) return 'NOT ALIGNED';
+  const tokens = criterion
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length > 3);
+  const ranked = files
+    .map((file) => {
+      const lowered = file.toLowerCase();
+      const score = tokens.reduce((total, token) => (lowered.includes(token) ? total + 1 : total), 0);
+      return { file, score };
+    })
+    .sort((left, right) => right.score - left.score || left.file.localeCompare(right.file));
+  const best = ranked[0];
+  if (best && best.score > 0) return `ALIGNED (${best.file})`;
+  if (files.length === 1) return `ALIGNED (${files[0]})`;
+  return `REVIEW (${files.slice(0, 2).join(', ')})`;
+}
+
+function isLikelyTestFile(filename: string): boolean {
+  const path = filename.replace(/\\/g, '/').toLowerCase();
+  return (
+    path.includes('/test/') ||
+    path.includes('/tests/') ||
+    path.includes('/__tests__/') ||
+    path.includes('test_') ||
+    path.includes('_test.') ||
+    path.includes('.spec.') ||
+    path.includes('.test.')
+  );
+}
+
+function asStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => (typeof item === 'string' ? item.trim() : ''))
+    .filter(Boolean);
+}
+
+export function mapQaGeneratedTests(state: BackendReleaseState): QaGeneratedTestRow[] {
+  const metadata = asRecord(state.qa_validation?.metadata);
+  const raw = metadata?.generated_tests;
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((item) => {
+    const row = asRecord(item);
+    if (!row) return [];
+    const acId = String(row.ac_id ?? '').trim();
+    if (!acId) return [];
+    const status = String(row.status ?? 'FAIL').trim().toUpperCase() === 'PASS' ? 'PASS' : 'FAIL';
+    return [
+      {
+        acId,
+        generatedTest: String(row.generated_test ?? '').trim() || '-',
+        testFile: String(row.test_file ?? '').trim() || '-',
+        summary: String(row.summary ?? '').trim() || '-',
+        reason: String(row.reason ?? '').trim() || '-',
+        status,
+      },
+    ];
+  });
+}
+
+function mapQaCoveragePercent(state: BackendReleaseState): number | null {
+  const metadata = asRecord(state.qa_validation?.metadata);
+  const value = metadata?.acceptance_criteria_coverage_percent;
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
 export function mapBackendToRelease(
   state: BackendReleaseState,
   createdByFallback = 'Release Portal'
@@ -542,9 +702,10 @@ export function mapBackendToRelease(
     releaseBranch: state.release_branch,
     pr: state.github_pr_url,
     jira: state.jira_url,
-    qaSignOff: state.qa_signoff_required ? 'Yes' : 'No',
+    qaSignOff: qaMethodLabel(state),
     qaReason: state.qa_signoff_not_required_reason ?? '',
     qaSignOffAttachmentName: state.qa_signoff_attachment?.filename ?? '',
+    qaMode: state.qa_mode ?? '',
     environment: state.environment,
     releaseDate: state.release_date,
     status,
@@ -566,6 +727,11 @@ export function mapBackendToRelease(
     qaValidationStatus: state.qa_validation?.status ?? null,
     jiraValidationErrors: state.jira_validation?.errors ?? [],
     qaValidationErrors: state.qa_validation?.errors ?? [],
+    qaCoverageRows: mapQaCoverageRows(state),
+    qaCoveragePercent: mapQaCoveragePercent(state),
+    qaGeneratedTests: mapQaGeneratedTests(state),
+    qaGeneratedTestsRepo: String(asRecord(state.qa_validation?.metadata)?.generated_tests_repo ?? '').trim(),
+    qaGeneratedTestsSha: String(asRecord(state.qa_validation?.metadata)?.generated_tests_sha ?? '').trim(),
   };
 }
 

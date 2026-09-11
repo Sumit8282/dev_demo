@@ -44,6 +44,25 @@ def test_load_qa_hybrid_extract_prompts():
     assert "{qa_document_text}" in tc_user
 
 
+def test_load_qa_generated_test_prompts():
+    system = load_prompt("qa_generated_test_system")
+    user = load_prompt("qa_generated_test_user")
+    assert "generated test" in system.lower()
+    assert "assert_mentioned" in system
+    assert "selenium" in system.lower()
+    assert "{acceptance_criteria}" in user
+    assert "{head_sha}" in user
+    assert "{repo_files}" in user
+
+
+def test_load_qa_lane2_draft_prompts():
+    system = load_prompt("qa_lane2_draft_system")
+    user = load_prompt("qa_lane2_draft_user")
+    assert "draft" in system.lower()
+    assert "{uncovered_criteria}" in user
+    assert "{head_sha}" in user
+
+
 def test_format_prompt_substitutes_placeholders():
     rendered = format_prompt(
         "jira_agent_user",

@@ -15,6 +15,20 @@ const statusClassMap: Record<string, string> = {
   Approved: 'badge-completed',
   'RM Approved': 'badge-completed',
   'Deployment Successful': 'badge-completed',
+  PASS: 'badge-completed',
+  FAIL: 'badge-rejected',
+  'Fully Covered': 'badge-completed',
+  'Partially Covered': 'badge-pending',
+  'Not Covered': 'badge-rejected',
+  'Covered but Failed': 'badge-failed',
+  'Unable to Determine': 'badge-pending',
+  COVERED: 'badge-completed',
+  PARTIAL: 'badge-pending',
+  INSUFFICIENT: 'badge-rejected',
+  ALIGNED: 'badge-completed',
+  REVIEW: 'badge-pending',
+  'NOT ALIGNED': 'badge-rejected',
+  'NOT COVERED': 'badge-rejected',
 };
 
 function normalizeStatus(status: string): StatusType | string {

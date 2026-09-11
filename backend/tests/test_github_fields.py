@@ -4,9 +4,11 @@ from app.utils.github_fields import (
     branches_match,
     extract_pr_author,
     extract_pr_description,
+    extract_pr_head_sha,
     extract_pull_request_comments,
     extract_source_branch,
     extract_target_branch,
+    parse_pull_request_files,
     pr_exists,
     validate_pr_open_for_release,
 )
@@ -112,3 +114,16 @@ def test_build_pull_request_change_stats():
         "frontend/package-lock.json",
         "frontend/src/components/Header.tsx",
     ]
+
+
+def test_extract_pr_head_sha():
+    payload = {"number": 1, "head": {"ref": "feature/x", "sha": "abc1234567def"}}
+    assert extract_pr_head_sha(payload) == "abc1234567def"
+
+
+def test_parse_pull_request_files_keeps_patch():
+    files = parse_pull_request_files(
+        [{"filename": "tests/test_foo.py", "status": "added", "additions": 4, "patch": "+def test_foo():\n+    assert True"}]
+    )
+    assert files[0]["filename"] == "tests/test_foo.py"
+    assert "def test_foo" in str(files[0]["patch"])

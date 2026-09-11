@@ -20,6 +20,7 @@ Allowed `coverage` values only:
 
 ### Fully Covered
 A test case directly validates the whole criterion **and** its status is Pass/Passed/Successful.
+A PR Testing / verification bullet counts when it explicitly checks that same criterion.
 
 ### Partially Covered
 A test case validates only part of the criterion.

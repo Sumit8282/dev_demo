@@ -3,6 +3,8 @@ import { Link, useParams } from 'react-router-dom';
 import { getQaSignoffAttachmentUrl } from '../api/releases';
 import { BACKEND_POST_MERGE_STATUSES } from '../api/releases';
 import AgentActivityPanel from '../components/AgentActivityPanel';
+import QaCoverageTable from '../components/QaCoverageTable';
+import QaGeneratedTestsTable from '../components/QaGeneratedTestsTable';
 import StatusBadge from '../components/StatusBadge';
 import WorkflowProgressBar from '../components/WorkflowProgressBar';
 import { useReleases } from '../context/ReleaseContext';
@@ -135,7 +137,7 @@ export default function ReleaseDetails() {
                     {release.jira}
                   </a>
                 </td>
-                <th>QA Sign-off Required</th>
+                <th>QA validation</th>
                 <td>{release.qaSignOff || '-'}</td>
               </tr>
               <tr>
@@ -193,6 +195,19 @@ export default function ReleaseDetails() {
         jiraValidationStatus={release.jiraValidationStatus}
         qaValidationStatus={release.qaValidationStatus}
         workflowEvents={release.workflowEvents}
+      />
+
+      <QaCoverageTable
+        rows={release.qaCoverageRows}
+        qaStatus={release.qaValidationStatus}
+        coveragePercent={release.qaCoveragePercent}
+        errors={release.qaValidationErrors}
+      />
+
+      <QaGeneratedTestsTable
+        rows={release.qaGeneratedTests}
+        repo={release.qaGeneratedTestsRepo}
+        sha={release.qaGeneratedTestsSha}
       />
 
       <AgentActivityPanel

@@ -40,12 +40,19 @@ class OverallValidationStatus(str, Enum):
     ERROR = "ERROR"
 
 
+class QAMode(str, Enum):
+    NOT_REQUIRED = "not_required"
+    UPLOAD = "upload"
+    PR_TESTS = "pr_tests"
+
+
 class ReleaseRequest(BaseModel):
     release_branch: str = Field(..., min_length=1)
     github_pr_url: HttpUrl
     jira_url: HttpUrl
     qa_signoff_required: bool
     qa_signoff_not_required_reason: str | None = Field(default=None)
+    qa_mode: QAMode | None = None
     environment: str = Field(..., min_length=1)
     release_date: date
     created_by: str | None = Field(default=None)
@@ -76,10 +83,19 @@ class ReleaseRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_qa_fields(self) -> ReleaseRequest:
-        if not self.qa_signoff_required and not self.qa_signoff_not_required_reason:
-            raise ValueError(
-                "qa_signoff_not_required_reason is required when qa_signoff_required is false"
-            )
+        if self.qa_mode is None:
+            self.qa_mode = QAMode.UPLOAD if self.qa_signoff_required else QAMode.NOT_REQUIRED
+
+        if self.qa_mode == QAMode.NOT_REQUIRED:
+            self.qa_signoff_required = False
+            if not self.qa_signoff_not_required_reason:
+                raise ValueError(
+                    "qa_signoff_not_required_reason is required when QA is not required"
+                )
+        elif self.qa_mode == QAMode.PR_TESTS:
+            self.qa_signoff_required = True
+        else:
+            self.qa_signoff_required = True
         return self
 
 
@@ -107,6 +123,7 @@ class ReleaseStateResponse(BaseModel):
     jira_issue_key: str
     qa_signoff_required: bool
     qa_signoff_not_required_reason: str | None = None
+    qa_mode: QAMode | None = None
     qa_signoff_attachment: QASignoffAttachment | None = None
     environment: str
     release_date: date

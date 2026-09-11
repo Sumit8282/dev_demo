@@ -11,6 +11,7 @@ For each test case return:
 Rules:
 - Extract only test cases that appear in the document.
 - Do not skip table rows that contain a TC id.
+- Include PR Testing / verification bullets as test cases when they describe a check that was done.
 - Do not invent tests or mark a planned idea as an executed case.
 - Do not change Failed / Blocked / Pending / Not Executed to Pass.
 - If a field is missing, leave it empty rather than guessing.

@@ -1,7 +1,9 @@
 """GitHub PR field extraction tests."""
 
 from app.utils.github_fields import (
+    GitHubIssueRef,
     branches_match,
+    extract_linked_issue_refs,
     extract_pr_author,
     extract_pr_description,
     extract_pr_head_sha,
@@ -119,6 +121,33 @@ def test_build_pull_request_change_stats():
 def test_extract_pr_head_sha():
     payload = {"number": 1, "head": {"ref": "feature/x", "sha": "abc1234567def"}}
     assert extract_pr_head_sha(payload) == "abc1234567def"
+
+
+def test_extract_linked_issue_refs_from_keywords_urls_and_cross_repo():
+    refs = extract_linked_issue_refs(
+        owner="acme",
+        repo="portal",
+        pr_number=9,
+        texts=[
+            "Fixes #12 and closes #9",
+            "Also resolve https://github.com/acme/portal/issues/15",
+            "See satalkar21/AI_Studio_Main#4",
+        ],
+    )
+    assert GitHubIssueRef("acme", "portal", 12) in refs
+    assert GitHubIssueRef("acme", "portal", 15) in refs
+    assert GitHubIssueRef("satalkar21", "AI_Studio_Main", 4) in refs
+    assert GitHubIssueRef("acme", "portal", 9) not in refs
+
+
+def test_extract_linked_issue_refs_skips_pr_number_and_duplicates():
+    refs = extract_linked_issue_refs(
+        owner="acme",
+        repo="portal",
+        pr_number=12,
+        texts=["Fixes #12", "Fixes https://github.com/acme/portal/issues/12"],
+    )
+    assert refs == []
 
 
 def test_parse_pull_request_files_keeps_patch():

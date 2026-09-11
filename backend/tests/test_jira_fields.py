@@ -17,6 +17,22 @@ Acceptance Criteria:
     assert criteria[0].startswith("Remove Offerings")
 
 
+def test_extract_acceptance_criteria_from_github_checkboxes():
+    description = """
+## Acceptance criteria
+- [ ] All offering cards are clickable.
+- [x] Clicking MCP Factory navigates to the correct Demo URL.
+
+## Test notes
+Compare before and after.
+"""
+    criteria = extract_acceptance_criteria(description)
+    assert criteria == [
+        "All offering cards are clickable.",
+        "Clicking MCP Factory navigates to the correct Demo URL.",
+    ]
+
+
 def test_extract_issue_comments():
     payload = {
         "fields": {

@@ -9,7 +9,7 @@ from langchain.tools import tool
 
 from app.agents.orchestrator import Orchestrator
 from app.agents.workflow_context import WorkflowRunContext
-from app.models.release import OverallValidationStatus
+from app.models.release import OverallValidationStatus, jira_required
 from app.models.validation import (
     GitHubValidationResult,
     JiraValidationResult,
@@ -50,12 +50,27 @@ def build_orchestrator_tools(
             message=f"GitHub PR validation completed — {result.status.value}",
             metadata={"status": result.status.value},
         )
-        return _compact_github_payload(result)
+        return _compact_github_payload(result, qa_mode=ctx.state.get("qa_mode"))
 
     @tool
     async def validate_jira_ticket() -> dict:
         """Validate the Jira ticket by invoking the Jira LangChain agent."""
         ctx.tool_calls.append("validate_jira_ticket")
+        if not jira_required(ctx.state.get("qa_mode")):
+            ctx.emit(
+                agent=WorkflowEventAgent.JIRA,
+                phase=WorkflowEventPhase.INFO,
+                message="Jira validation skipped — GitHub-issues QA does not use Jira",
+            )
+            return {
+                "status": "SKIPPED",
+                "errors": [],
+                "next_action": "validate_qa_signoff",
+                "message": (
+                    "Jira validation skipped for GitHub-issues QA. "
+                    "Call validate_qa_signoff next."
+                ),
+            }
         ctx.emit(
             agent=WorkflowEventAgent.JIRA,
             phase=WorkflowEventPhase.STARTED,
@@ -205,34 +220,44 @@ async def run_orchestrator_tool_sequence(
         await _post_failure_via_tool(orchestrator, ctx, tools, github.errors)
         return
 
-    if ctx.jira_validation is None:
-        if ctx.github_comment_posted:
-            logger.warning(
-                "[ORCHESTRATOR] Clearing premature GitHub failure comment flag after GitHub PASS"
-            )
-            ctx.github_comment_posted = False
-        logger.info("[ORCHESTRATOR] Continuing workflow with Jira validation")
-        await tools["validate_jira_ticket"].ainvoke({})
+    skip_jira = not jira_required(ctx.state.get("qa_mode"))
     jira = ctx.jira_validation
-    if jira is None:
-        return
-    if jira.status in (ValidationStatus.FAIL, ValidationStatus.ERROR):
-        reasons = jira.errors or [
-            "Jira validation could not be completed."
-            if jira.status == ValidationStatus.ERROR
-            else "Jira validation failed."
-        ]
-        await _post_failure_via_tool(orchestrator, ctx, tools, reasons)
-        return
+    if not skip_jira:
+        if ctx.jira_validation is None:
+            if ctx.github_comment_posted:
+                logger.warning(
+                    "[ORCHESTRATOR] Clearing premature GitHub failure comment flag after GitHub PASS"
+                )
+                ctx.github_comment_posted = False
+            logger.info("[ORCHESTRATOR] Continuing workflow with Jira validation")
+            await tools["validate_jira_ticket"].ainvoke({})
+        jira = ctx.jira_validation
+        if jira is None:
+            return
+        if jira.status in (ValidationStatus.FAIL, ValidationStatus.ERROR):
+            reasons = jira.errors or [
+                "Jira validation could not be completed."
+                if jira.status == ValidationStatus.ERROR
+                else "Jira validation failed."
+            ]
+            await _post_failure_via_tool(orchestrator, ctx, tools, reasons)
+            return
+    elif ctx.github_comment_posted:
+        logger.warning(
+            "[ORCHESTRATOR] Clearing premature GitHub failure comment flag after GitHub PASS"
+        )
+        ctx.github_comment_posted = False
 
     if ctx.qa_validation is None:
         logger.info("[ORCHESTRATOR] Continuing workflow with QA validation")
         await tools["validate_qa_signoff"].ainvoke({})
     qa = ctx.qa_validation
-    if github is None or jira is None or qa is None:
+    if github is None or qa is None or (not skip_jira and jira is None):
         return
 
-    overall_status, failure_reasons = orchestrator.evaluate_validation(github, jira, qa)
+    overall_status, failure_reasons = orchestrator.evaluate_validation(
+        github, None if skip_jira else jira, qa
+    )
     if overall_status == OverallValidationStatus.PASS:
         if ctx.l3_flow is None:
             await tools["prepare_l3_approval"].ainvoke({})
@@ -280,7 +305,11 @@ def _cannot_comment_on_invalid_pr(ctx: WorkflowRunContext) -> bool:
     )
 
 
-def _compact_github_payload(result: GitHubValidationResult) -> dict[str, Any]:
+def _compact_github_payload(
+    result: GitHubValidationResult,
+    *,
+    qa_mode: str | None = None,
+) -> dict[str, Any]:
     metadata = result.metadata or {}
     payload: dict[str, Any] = {
         "status": result.status.value,
@@ -292,11 +321,18 @@ def _compact_github_payload(result: GitHubValidationResult) -> dict[str, Any]:
         "files_changed_count": metadata.get("files_changed_count"),
     }
     if result.status == ValidationStatus.PASS:
-        payload["next_action"] = "validate_jira_ticket"
-        payload["message"] = (
-            "GitHub validation PASSED. Do not post a failure comment. "
-            "Call validate_jira_ticket next."
-        )
+        if jira_required(qa_mode):
+            payload["next_action"] = "validate_jira_ticket"
+            payload["message"] = (
+                "GitHub validation PASSED. Do not post a failure comment. "
+                "Call validate_jira_ticket next."
+            )
+        else:
+            payload["next_action"] = "validate_qa_signoff"
+            payload["message"] = (
+                "GitHub validation PASSED. Do not post a failure comment. "
+                "Jira is skipped for GitHub-issues QA. Call validate_qa_signoff next."
+            )
     elif result.status == ValidationStatus.FAIL:
         payload["next_action"] = "post_release_failure_comment"
         payload["message"] = "GitHub validation FAILED. Call post_release_failure_comment and stop."

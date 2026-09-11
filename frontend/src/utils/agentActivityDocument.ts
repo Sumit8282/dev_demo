@@ -339,7 +339,7 @@ function mapEventToLines(event: WorkflowEvent, ctx: AgentActivityContext): Activ
           type: 'phase',
           sectionKey: 'jira',
           phaseLabel: 'Started',
-          text: 'Validating Jira ticket.',
+          text: 'Running scope validation.',
         },
       ];
     }
@@ -466,8 +466,8 @@ function mapEventToLines(event: WorkflowEvent, ctx: AgentActivityContext): Activ
       sectionKey: 'jira',
       phaseLabel: 'Completed',
       text: passed
-        ? 'Jira validation passed.'
-        : failureMessage ?? 'Jira validation failed.',
+        ? 'Scope validation passed.'
+        : failureMessage ?? 'Scope validation failed.',
     });
     return lines;
   }

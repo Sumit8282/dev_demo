@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useOutletContext } from 'react-router-dom';
+import GitHubIssuesCell from '../components/GitHubIssuesCell';
 import SearchBox from '../components/SearchBox';
 import StatusBadge from '../components/StatusBadge';
 import type { OutletContextType } from '../components/Layout';
 import { useReleases } from '../context/ReleaseContext';
+import { isGithubIssuesQa } from '../utils/githubIssueLinks';
 
 export default function ReleaseDashboard() {
   const { releases, loading, error, refreshReleases } = useReleases();
@@ -19,6 +21,12 @@ export default function ReleaseDashboard() {
         r.id.toLowerCase().includes(query) ||
         r.pr.toLowerCase().includes(query) ||
         r.jira.toLowerCase().includes(query) ||
+        (r.githubIssues ?? []).some(
+          (issue) =>
+            issue.label.toLowerCase().includes(query) ||
+            issue.title.toLowerCase().includes(query) ||
+            String(issue.number).includes(query)
+        ) ||
         r.createdBy.toLowerCase().includes(query) ||
         r.status.toLowerCase().includes(query)
     );
@@ -85,7 +93,7 @@ export default function ReleaseDashboard() {
               <th>Release ID</th>
               <th>Release Branch</th>
               <th>PR</th>
-              <th>Jira</th>
+              <th>Jira / Issues</th>
               <th>Environment</th>
               <th>Release Date</th>
               <th>Current Stage</th>
@@ -131,15 +139,21 @@ export default function ReleaseDashboard() {
                     </a>
                   </td>
                   <td className="cell-truncate">
-                    <a
-                      href={release.jira}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="link-muted cell-truncate-text"
-                      title={release.jira}
-                    >
-                      {release.jira}
-                    </a>
+                    {isGithubIssuesQa(release.qaMode) ? (
+                      <GitHubIssuesCell issues={release.githubIssues} />
+                    ) : release.jira ? (
+                      <a
+                        href={release.jira}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="link-muted cell-truncate-text"
+                        title={release.jira}
+                      >
+                        {release.jira}
+                      </a>
+                    ) : (
+                      '-'
+                    )}
                   </td>
                   <td>{release.environment}</td>
                   <td>{release.releaseDate}</td>

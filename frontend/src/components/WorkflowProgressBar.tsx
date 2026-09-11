@@ -17,6 +17,7 @@ interface WorkflowProgressBarProps {
   jiraValidationStatus?: string | null;
   qaValidationStatus?: string | null;
   workflowEvents?: WorkflowEvent[];
+  qaMode?: string;
 }
 
 function useStaggeredValidationCompleted(
@@ -61,16 +62,19 @@ export default function WorkflowProgressBar({
   jiraValidationStatus,
   qaValidationStatus,
   workflowEvents = [],
+  qaMode = '',
 }: WorkflowProgressBarProps) {
+  const skipJira = qaMode === 'github_issues';
   const validationProgress = useMemo(
     () =>
       computeValidationProgress(
         githubValidationStatus,
         jiraValidationStatus,
         qaValidationStatus,
-        workflowEvents
+        workflowEvents,
+        skipJira
       ),
-    [githubValidationStatus, jiraValidationStatus, qaValidationStatus, workflowEvents]
+    [githubValidationStatus, jiraValidationStatus, qaValidationStatus, workflowEvents, skipJira]
   );
 
   const visibleValidationCompleted = useStaggeredValidationCompleted(
@@ -89,6 +93,7 @@ export default function WorkflowProgressBar({
         qaStatus: qaValidationStatus,
         workflowEvents,
         visibleValidationCompleted,
+        skipJira,
       }),
     [
       currentStage,
@@ -98,6 +103,7 @@ export default function WorkflowProgressBar({
       qaValidationStatus,
       workflowEvents,
       visibleValidationCompleted,
+      skipJira,
     ]
   );
 

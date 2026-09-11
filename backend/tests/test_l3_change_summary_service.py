@@ -99,3 +99,25 @@ async def test_generate_summary_includes_jira_comments_in_prompt(summary_service
     user_message = mock_llm.ainvoke.await_args.args[0][1].content
     assert "Ready for release" in user_message
     assert "Bug in navigation" in user_message
+
+
+@pytest.mark.asyncio
+async def test_generate_summary_skips_jira_fetch_when_issue_key_blank(summary_service):
+    fetch = AsyncMock(return_value=("should not fetch", []))
+    mock_llm = AsyncMock()
+    mock_llm.ainvoke.return_value = MagicMock(content="- PR only summary")
+
+    with patch("app.services.l3_change_summary_service.get_llm", return_value=mock_llm), patch.object(
+        summary_service,
+        "_fetch_jira_context",
+        new=fetch,
+    ):
+        summary = await summary_service.generate_summary(
+            release_id="REL-003",
+            jira_issue_key="",
+            github_validation={"metadata": {"pr_title": "Cards", "pr_description": "Clickable"}},
+            jira_validation={},
+        )
+
+    fetch.assert_not_awaited()
+    assert "PR only summary" in summary

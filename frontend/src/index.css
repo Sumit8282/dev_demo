@@ -650,6 +650,15 @@ a:hover {
   color: var(--color-text-secondary);
 }
 
+.github-issue-links {
+  display: inline;
+  line-height: 1.45;
+}
+
+.github-issue-link-item {
+  white-space: nowrap;
+}
+
 .empty-state {
   text-align: center;
   padding: 48px 16px !important;

@@ -84,7 +84,7 @@ export function formatJiraValidationRemarks(
     return resolveJiraTicketNotFoundMessage(issueKey, validation.errors ?? undefined);
   }
   if (validation.errors?.length) return validation.errors.join('; ');
-  if (validation.status === 'PASS') return 'Jira ticket validated';
-  if (validation.status === 'FAIL') return 'Jira validation failed';
-  return 'Jira validation error';
+  if (validation.status === 'PASS') return 'Scope validated';
+  if (validation.status === 'FAIL') return 'Scope validation failed';
+  return 'Scope validation error';
 }

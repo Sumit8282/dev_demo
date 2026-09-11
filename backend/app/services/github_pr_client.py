@@ -117,17 +117,40 @@ class GitHubPRClient:
             return payload
         raise GitHubPRError(f"Unexpected pull request payload for {owner}/{repo}#{pull_number}")
 
+    async def get_issue(
+        self,
+        owner: str,
+        repo: str,
+        issue_number: int,
+    ) -> dict[str, Any]:
+        path = f"/repos/{owner}/{repo}/issues/{int(issue_number)}"
+        response = await self._request("GET", path, expected_status=(200, 404))
+        if response.status_code == 404:
+            return {"error": "Not found"}
+        payload = response.json()
+        if isinstance(payload, dict):
+            return payload
+        raise GitHubPRError(f"Unexpected issue payload for {owner}/{repo}#{issue_number}")
+
+    async def get_issue_comments(
+        self,
+        owner: str,
+        repo: str,
+        issue_number: int,
+    ) -> list[Any]:
+        path = f"/repos/{owner}/{repo}/issues/{int(issue_number)}/comments"
+        payload = (
+            await self._request("GET", path, params={"per_page": 100})
+        ).json()
+        return payload if isinstance(payload, list) else []
+
     async def get_pull_request_comments(
         self,
         owner: str,
         repo: str,
         pull_number: int,
     ) -> list[Any]:
-        path = f"/repos/{owner}/{repo}/issues/{int(pull_number)}/comments"
-        payload = (
-            await self._request("GET", path, params={"per_page": 100})
-        ).json()
-        return payload if isinstance(payload, list) else []
+        return await self.get_issue_comments(owner, repo, pull_number)
 
     async def get_pull_request_files(
         self,

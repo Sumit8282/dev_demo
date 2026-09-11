@@ -9,7 +9,7 @@ import { formatTime } from '../utils/helpers';
 const AGENT_LABELS: Record<string, string> = {
   system: 'System',
   orchestrator: 'Orchestrator',
-  jira: 'Jira Agent',
+  jira: 'Scope Agent',
   qa: 'QA Agent',
   l3: 'L3 Agent',
   merge: 'Merge agent',

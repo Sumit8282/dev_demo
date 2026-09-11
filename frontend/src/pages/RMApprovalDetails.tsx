@@ -6,15 +6,17 @@ import {
   rejectRmReleaseApi,
   type RMApprovalRequestInfo,
 } from '../api/releases';
+import GitHubIssuesCell from '../components/GitHubIssuesCell';
 import StatusBadge from '../components/StatusBadge';
 import { useAuth } from '../context/AuthContext';
 import { useReleases } from '../context/ReleaseContext';
+import { isGithubIssuesQa } from '../utils/githubIssueLinks';
 
 export default function RMApprovalDetails() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { user } = useAuth();
-  const { updateReleaseFromBackend } = useReleases();
+  const { getRelease, updateReleaseFromBackend } = useReleases();
   const [approval, setApproval] = useState<RMApprovalRequestInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -118,6 +120,8 @@ export default function RMApprovalDetails() {
 
   const isPending = approval.status === 'PENDING';
   const statuses = approval.approval_statuses;
+  const linkedRelease = getRelease(approval.release_id);
+  const usesGithubIssues = isGithubIssuesQa(linkedRelease?.qaMode);
 
   return (
     <div className="page">
@@ -199,16 +203,23 @@ export default function RMApprovalDetails() {
                 </td>
               </tr>
               <tr>
-                <th>Jira Ticket</th>
+                <th>{usesGithubIssues ? 'GitHub Issues' : 'Jira Ticket'}</th>
                 <td colSpan={3}>
-                  <a
-                    href={approval.jira_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="link-muted"
-                  >
-                    {approval.jira_url} ({approval.jira_issue_key})
-                  </a>
+                  {usesGithubIssues ? (
+                    <GitHubIssuesCell issues={linkedRelease?.githubIssues} />
+                  ) : approval.jira_url ? (
+                    <a
+                      href={approval.jira_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="link-muted"
+                    >
+                      {approval.jira_url}
+                      {approval.jira_issue_key ? ` (${approval.jira_issue_key})` : ''}
+                    </a>
+                  ) : (
+                    '-'
+                  )}
                 </td>
               </tr>
               <tr>

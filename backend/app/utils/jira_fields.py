@@ -101,6 +101,25 @@ _AC_SECTION_HEADERS = (
 
 _BULLET_PREFIX = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+")
 _AC_ID_PREFIX = re.compile(r"^\s*AC[-\s]?\d+\s*[:.)-]\s*", re.IGNORECASE)
+_CHECKBOX_PREFIX = re.compile(r"^\[(?: |x|X)\]\s+")
+
+
+def _section_header_key(line: str) -> str:
+    text = line.strip()
+    if text.startswith("#"):
+        text = text.lstrip("#").strip()
+    return text.lower().rstrip(":")
+
+
+def _is_acceptance_criteria_header(line: str) -> bool:
+    key = _section_header_key(line)
+    return key in _AC_SECTION_HEADERS or key.startswith("acceptance criteria")
+
+
+def _clean_criterion_text(line: str) -> str:
+    current = _BULLET_PREFIX.sub("", line)
+    current = _AC_ID_PREFIX.sub("", current).strip()
+    return _CHECKBOX_PREFIX.sub("", current).strip()
 
 
 def extract_acceptance_criteria(description: str | None) -> list[str]:
@@ -114,8 +133,7 @@ def extract_acceptance_criteria(description: str | None) -> list[str]:
 
     for line in lines:
         stripped = line.strip()
-        lowered = stripped.lower().rstrip(":")
-        if lowered in _AC_SECTION_HEADERS or lowered.startswith("acceptance criteria"):
+        if _is_acceptance_criteria_header(stripped):
             in_section = True
             continue
         if in_section:
@@ -123,6 +141,9 @@ def extract_acceptance_criteria(description: str | None) -> list[str]:
                 if section_lines:
                     break
                 continue
+            if stripped.startswith("#"):
+                break
+            lowered = stripped.lower().rstrip(":")
             if stripped.endswith(":") and lowered not in _AC_SECTION_HEADERS:
                 header = lowered[:-1]
                 if header in {"testing", "notes", "out of scope", "scope"}:
@@ -138,12 +159,11 @@ def extract_acceptance_criteria(description: str | None) -> list[str]:
         if _BULLET_PREFIX.match(line) or _AC_ID_PREFIX.match(line):
             if current:
                 criteria.append(current.strip())
-            current = _BULLET_PREFIX.sub("", line)
-            current = _AC_ID_PREFIX.sub("", current).strip()
+            current = _clean_criterion_text(line)
         elif current:
             current = f"{current} {line.strip()}".strip()
         else:
-            current = line.strip()
+            current = _clean_criterion_text(line)
     if current:
         criteria.append(current.strip())
 

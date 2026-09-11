@@ -2,6 +2,7 @@ import type { BackendReleaseState } from '../api/releases';
 import { BACKEND_POST_MERGE_STATUSES } from '../api/releases';
 import type { QaCoverageRow, QaGeneratedTestRow, Release, StatusType, WorkflowActivity, WorkflowStep } from '../types/release';
 import type { WorkflowEvent } from '../types/workflowEvent';
+import { mapGithubIssuesFromState } from './githubIssueLinks';
 import { formatDate, formatTime } from './helpers';
 import { formatJiraValidationRemarks } from './jiraValidationMessages';
 
@@ -332,7 +333,7 @@ function buildWorkflowActivities(state: BackendReleaseState, createdBy: string):
     name: 'Agent',
     soeId: '',
     team: AI_TEAM,
-    activity: 'Jira Validation',
+    activity: 'Scope Agent',
     status: jiraStatus
       ? validationToStatus(jiraStatus)
       : githubStatus && isValidating
@@ -533,6 +534,7 @@ function mapWorkflowStatus(state: BackendReleaseState): {
 function qaMethodLabel(state: BackendReleaseState): string {
   const mode = state.qa_mode;
   if (mode === 'pr_tests') return 'Live Jira + GitHub evidence';
+  if (mode === 'github_issues') return 'Live GitHub issues + evidence';
   if (mode === 'upload') return 'Upload document';
   if (mode === 'not_required' || !state.qa_signoff_required) return 'No';
   return state.qa_signoff_required ? 'Yes' : 'No';
@@ -580,6 +582,7 @@ function formatQaSource(
 ): string {
   if (qaMode === 'upload') return 'jira+qa_document';
   if (qaMode === 'pr_tests') return 'jira+github';
+  if (qaMode === 'github_issues') return 'github_issues+github';
   const acSource = String(qaMeta?.ac_source ?? '').trim();
   if (acSource) return `jira+${acSource}`;
   return 'jira';
@@ -702,6 +705,7 @@ export function mapBackendToRelease(
     releaseBranch: state.release_branch,
     pr: state.github_pr_url,
     jira: state.jira_url,
+    githubIssues: mapGithubIssuesFromState(state),
     qaSignOff: qaMethodLabel(state),
     qaReason: state.qa_signoff_not_required_reason ?? '',
     qaSignOffAttachmentName: state.qa_signoff_attachment?.filename ?? '',

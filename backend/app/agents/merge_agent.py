@@ -310,6 +310,10 @@ class MergeAgent:
         return True, []
 
     def _validate_jira_pass(self, state: ReleaseState) -> tuple[bool, list[str]]:
+        from app.models.release import jira_required
+
+        if not jira_required(state.get("qa_mode")):
+            return True, []
         raw = state.get("jira_validation")
         if raw is None:
             return False, ["Jira validation result is missing."]

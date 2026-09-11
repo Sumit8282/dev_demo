@@ -2,7 +2,74 @@
 
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
 from typing import Any
+
+_OWNER = r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"
+_REPO = r"[A-Za-z0-9._-]+"
+_LINK_KEYWORDS = r"(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)"
+_ISSUE_URL = re.compile(
+    rf"https://github\.com/({_OWNER})/({_REPO})/issues/(\d+)",
+    re.IGNORECASE,
+)
+_KEYWORD_CROSS = re.compile(
+    rf"(?i)\b{_LINK_KEYWORDS}\s+({_OWNER})/({_REPO})#(\d+)\b"
+)
+_KEYWORD_HASH = re.compile(rf"(?i)\b{_LINK_KEYWORDS}\s+#(\d+)\b")
+_CROSS_REPO = re.compile(rf"\b({_OWNER})/({_REPO})#(\d+)\b")
+
+
+@dataclass(frozen=True)
+class GitHubIssueRef:
+    owner: str
+    repo: str
+    number: int
+
+
+def extract_linked_issue_refs(
+    *,
+    owner: str,
+    repo: str,
+    texts: list[str] | None = None,
+    pr_number: int | None = None,
+) -> list[GitHubIssueRef]:
+    """Collect unique GitHub issue refs linked from PR title, body, or comments."""
+    default_owner = (owner or "").strip()
+    default_repo = (repo or "").strip()
+    found: list[GitHubIssueRef] = []
+    seen: set[tuple[str, str, int]] = set()
+
+    def _add(item_owner: str, item_repo: str, number: int) -> None:
+        owner_key = item_owner.strip()
+        repo_key = item_repo.strip()
+        if not owner_key or not repo_key or number <= 0:
+            return
+        if (
+            pr_number
+            and number == pr_number
+            and owner_key.lower() == default_owner.lower()
+            and repo_key.lower() == default_repo.lower()
+        ):
+            return
+        key = (owner_key.lower(), repo_key.lower(), number)
+        if key in seen:
+            return
+        seen.add(key)
+        found.append(GitHubIssueRef(owner=owner_key, repo=repo_key, number=number))
+
+    for text in texts or []:
+        if not text:
+            continue
+        for match in _ISSUE_URL.finditer(text):
+            _add(match.group(1), match.group(2), int(match.group(3)))
+        for match in _KEYWORD_CROSS.finditer(text):
+            _add(match.group(1), match.group(2), int(match.group(3)))
+        for match in _KEYWORD_HASH.finditer(text):
+            _add(default_owner, default_repo, int(match.group(1)))
+        for match in _CROSS_REPO.finditer(text):
+            _add(match.group(1), match.group(2), int(match.group(3)))
+    return found
 
 
 def _walk_dicts(value: Any):

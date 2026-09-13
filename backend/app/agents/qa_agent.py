@@ -8,7 +8,7 @@ from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
-from app.agents.llm_runner import create_langchain_agent, invoke_structured_agent
+from app.agents.llm_runner import create_qa_deep_agent, invoke_structured_agent
 from app.agents.tools.mcp_tools import build_jira_mcp_tools
 from app.config import Settings, get_settings
 from app.mcp.jira_mcp import JiraMCPClient
@@ -809,7 +809,7 @@ class QAAgent:
         return build_jira_mcp_tools(self._jira_client)
 
     def build_ac_extract_agent(self, llm: BaseChatModel | None = None):
-        return create_langchain_agent(
+        return create_qa_deep_agent(
             settings=self.settings,
             tools=self.get_mcp_tools(),
             system_prompt=load_prompt("qa_ac_extract_system"),
@@ -819,7 +819,7 @@ class QAAgent:
         )
 
     def build_tc_extract_agent(self, llm: BaseChatModel | None = None):
-        return create_langchain_agent(
+        return create_qa_deep_agent(
             settings=self.settings,
             tools=[],
             system_prompt=load_prompt("qa_tc_extract_system"),
@@ -829,7 +829,7 @@ class QAAgent:
         )
 
     def build_langchain_agent(self, llm: BaseChatModel | None = None):
-        return create_langchain_agent(
+        return create_qa_deep_agent(
             settings=self.settings,
             tools=[],
             system_prompt=load_prompt("qa_agent_system"),
@@ -839,7 +839,7 @@ class QAAgent:
         )
 
     def build_lane2_draft_agent(self, llm: BaseChatModel | None = None):
-        return create_langchain_agent(
+        return create_qa_deep_agent(
             settings=self.settings,
             tools=[],
             system_prompt=load_prompt("qa_lane2_draft_system"),
@@ -849,7 +849,7 @@ class QAAgent:
         )
 
     def build_generated_test_agent(self, llm: BaseChatModel | None = None):
-        return create_langchain_agent(
+        return create_qa_deep_agent(
             settings=self.settings,
             tools=[],
             system_prompt=load_prompt("qa_generated_test_system"),

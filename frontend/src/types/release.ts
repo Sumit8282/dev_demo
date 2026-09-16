@@ -9,7 +9,7 @@ export type ApprovalType = 'L3' | 'RM';
 
 export type WorkflowStep =
   | 'PR Raised'
-  | 'Jira Validation'
+  | 'Scope Agent'
   | 'QA Validation'
   | 'L3 Approval'
   | 'L3 Approval Pending'
@@ -50,11 +50,21 @@ export interface QaGeneratedTestRow {
   status: 'PASS' | 'FAIL';
 }
 
+export interface GitHubIssueLink {
+  owner: string;
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+  label: string;
+}
+
 export interface Release {
   id: string;
   releaseBranch: string;
   pr: string;
   jira: string;
+  githubIssues: GitHubIssueLink[];
   qaSignOff: string;
   qaReason: string;
   qaSignOffAttachmentName: string;
@@ -93,7 +103,7 @@ export interface NewReleaseForm {
   releaseDate: string;
 }
 
-export type QaValidationChoice = 'No' | 'Upload' | 'PrTests';
+export type QaValidationChoice = 'No' | 'Upload' | 'PrTests' | 'GhIssues';
 
 export const QA_SIGNOFF_ALLOWED_EXTENSIONS = [
   '.docx',

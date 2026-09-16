@@ -49,7 +49,7 @@ class L3ChangeSummaryService:
         )
         jira_comments = _format_jira_comment_lines(jira_metadata.get("jira_comments"))
 
-        if not jira_description or not jira_comments:
+        if (jira_issue_key or "").strip() and (not jira_description or not jira_comments):
             fetched_description, fetched_comments = await self._fetch_jira_context(jira_issue_key)
             jira_description = jira_description or fetched_description or "Not provided"
             if not jira_comments:

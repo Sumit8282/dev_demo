@@ -686,3 +686,116 @@ async def test_qa_agent_pr_tests_fails_when_ci_failed():
 
     assert result.status == ValidationStatus.FAIL
     assert any("did not pass" in error.lower() for error in result.errors)
+
+
+class _FakeIssueClient:
+    def __init__(self, issues: dict[int, dict] | None = None):
+        self.issues = issues or {}
+
+    async def get_issue(self, owner, repo, issue_number):
+        return dict(self.issues.get(issue_number) or {"error": "Not found"})
+
+    async def get_issue_comments(self, owner, repo, issue_number):
+        return []
+
+
+def _gh_issue_pass_output() -> QALLMValidationOutput:
+    return QALLMValidationOutput(
+        status=ValidationStatus.PASS,
+        validation_summary="## QA Validation Summary\n\n**Overall Status:** PASS",
+        coverage_matrix=[
+            QACoverageMatrixRow(
+                ac_id="GH-12-01",
+                acceptance_criterion="Offerings dropdown navigates correctly",
+                test_cases="TC-001",
+                coverage="Fully Covered",
+                test_result="Pass",
+                evidence_reason="PR test covers GitHub issue AC",
+            )
+        ],
+        acceptance_criteria_coverage_percent=100.0,
+        passed_acceptance_criteria_percent=100.0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_qa_agent_github_issues_fails_when_none_linked():
+    settings = MagicMock()
+    settings.llm_enabled = True
+    agent = QAAgent(settings=settings, github_pr_client=_FakeIssueClient())
+
+    result = await agent.validate_async(
+        release_id="REL-1",
+        qa_signoff_required=True,
+        qa_mode="github_issues",
+        environment="UAT",
+        release_version="v1.0.0",
+        github_validation=_pr_github_validation(),
+    )
+
+    assert result.status == ValidationStatus.FAIL
+    assert any("no github issues linked" in error.lower() for error in result.errors)
+    assert result.metadata["qa_mode"] == "github_issues"
+    assert result.metadata["github_issue_numbers"] == []
+
+
+@pytest.mark.asyncio
+async def test_qa_agent_github_issues_lane1_pass():
+    settings = MagicMock()
+    settings.llm_enabled = True
+    agent = QAAgent(
+        settings=settings,
+        github_pr_client=_FakeIssueClient(
+            {
+                12: {
+                    "number": 12,
+                    "title": "Offering cards",
+                    "body": "## Acceptance criteria\n- [ ] Offerings dropdown navigates correctly\n",
+                }
+            }
+        ),
+    )
+    agent._generated_test_runner.run = _passthrough_generated_run
+
+    with patch.object(agent, "build_langchain_agent", return_value=MagicMock()), patch.object(
+        agent, "build_tc_extract_agent", return_value=MagicMock()
+    ), patch.object(
+        agent, "build_generated_test_agent", return_value=MagicMock()
+    ), patch(
+        "app.agents.qa_agent.invoke_structured_agent",
+        new=_hybrid_invoke(_gh_issue_pass_output()),
+    ):
+        result = await agent.validate_async(
+            release_id="REL-1",
+            qa_signoff_required=True,
+            qa_mode="github_issues",
+            environment="UAT",
+            release_version="v1.0.0",
+            pr_title="Remove Offerings",
+            jira_issue_key="SCRUM-6",
+            github_validation={
+                "metadata": {
+                    "owner": "acme",
+                    "repo": "portal",
+                    "pr_title": "Remove Offerings",
+                    "pr_description": "Fixes #12",
+                    "head_sha": "abc123456789",
+                    "changed_files": [
+                        {
+                            "filename": "tests/test_offerings.py",
+                            "status": "added",
+                            "patch": "+def test_remove_offerings():\n+    assert True\n",
+                        }
+                    ],
+                }
+            },
+        )
+
+    assert result.status == ValidationStatus.PASS
+    assert result.metadata["qa_mode"] == "github_issues"
+    assert result.metadata["ac_source"] == "github_issues"
+    assert result.metadata["github_issue_numbers"] == ["acme/portal#12"]
+    assert result.metadata["coverage_matrix"][0]["ac_id"] == "GH-12-01"
+    assert result.metadata["generated_tests"]
+    assert result.metadata["generated_tests"][0]["status"] == "PASS"
+    assert result.metadata["generated_tests"][0]["ac_id"] == "GH-12-01"

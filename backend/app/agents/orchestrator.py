@@ -781,6 +781,11 @@ class Orchestrator:
                         f"Lane 1 PR test coverage (sha={(result.metadata or {}).get('head_sha') or 'unknown'}) — "
                         f"{'PASS' if checks.signoff_completed else 'FAIL'}"
                     )
+                elif qa_mode == "github_issues":
+                    check_message = (
+                        f"Lane 1 GitHub issue coverage (sha={(result.metadata or {}).get('head_sha') or 'unknown'}) — "
+                        f"{'PASS' if checks.signoff_completed else 'FAIL'}"
+                    )
                 else:
                     check_message = (
                         f"QA sign-off attachment validated — "
@@ -818,7 +823,7 @@ class Orchestrator:
     def evaluate_validation(
         self,
         github_result: GitHubValidationResult,
-        jira_result: JiraValidationResult,
+        jira_result: JiraValidationResult | None,
         qa_result: QAValidationResult,
     ) -> tuple[OverallValidationStatus, list[str]]:
         failure_reasons: list[str] = []
@@ -830,10 +835,13 @@ class Orchestrator:
         elif github_result.status == ValidationStatus.FAIL:
             failure_reasons.extend(github_result.errors)
 
-        if jira_result.status == ValidationStatus.ERROR:
-            failure_reasons.extend(jira_result.errors or ["Jira validation could not be completed."])
-        elif jira_result.status == ValidationStatus.FAIL:
-            failure_reasons.extend(jira_result.errors)
+        if jira_result is not None:
+            if jira_result.status == ValidationStatus.ERROR:
+                failure_reasons.extend(
+                    jira_result.errors or ["Jira validation could not be completed."]
+                )
+            elif jira_result.status == ValidationStatus.FAIL:
+                failure_reasons.extend(jira_result.errors)
 
         if qa_result.status == ValidationStatus.ERROR:
             failure_reasons.extend(qa_result.errors or ["QA validation could not be completed."])
@@ -842,15 +850,16 @@ class Orchestrator:
 
         if (
             github_result.status == ValidationStatus.ERROR
-            or jira_result.status == ValidationStatus.ERROR
+            or (jira_result is not None and jira_result.status == ValidationStatus.ERROR)
             or qa_result.status == ValidationStatus.ERROR
         ):
             logger.info("[ORCHESTRATOR] Overall validation: ERROR")
             return OverallValidationStatus.ERROR, failure_reasons
 
+        jira_ok = jira_result is None or jira_result.status == ValidationStatus.PASS
         if (
             github_result.status == ValidationStatus.PASS
-            and jira_result.status == ValidationStatus.PASS
+            and jira_ok
             and qa_result.status == ValidationStatus.PASS
         ):
             logger.info("[ORCHESTRATOR] Overall validation: PASS")
@@ -873,12 +882,16 @@ class Orchestrator:
         self,
         state: ReleaseState,
         github_result: GitHubValidationResult,
-        jira_result: JiraValidationResult,
+        jira_result: JiraValidationResult | None,
         qa_result: QAValidationResult,
         failure_reasons: list[str],
     ) -> str:
         github_label = self._validation_label(github_result.status)
-        jira_label = self._validation_label(jira_result.status)
+        jira_label = (
+            "SKIPPED"
+            if jira_result is None
+            else self._validation_label(jira_result.status)
+        )
         qa_label = self._validation_label(qa_result.status)
 
         failed_checks = "\n".join(f"* {reason}" for reason in failure_reasons) or "* Unknown failure"
@@ -886,7 +899,7 @@ class Orchestrator:
         target_branch = github_result.metadata.get("target_branch", "unknown")
         raised_by = github_result.metadata.get("raised_by", "unknown")
         pr_number = github_result.metadata.get("pull_number", state["github_pr_number"])
-        return (
+        body = (
             "Release Validation Failed\n\n"
             f"Release Branch: {state['release_branch']}\n"
             f"Environment: {state['environment']}\n"

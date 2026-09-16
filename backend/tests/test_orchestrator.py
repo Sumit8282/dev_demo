@@ -67,6 +67,18 @@ def test_evaluate_fail_collects_all_errors():
     assert len(reasons) == 3
 
 
+def test_evaluate_pass_when_jira_skipped():
+    orchestrator = Orchestrator()
+    github = _pass_github()
+    qa = QAValidationResult(
+        status=ValidationStatus.PASS,
+        checks=QAChecks(signoff_required=True, signoff_completed=True),
+    )
+    overall, reasons = orchestrator.evaluate_validation(github, None, qa)
+    assert overall == OverallValidationStatus.PASS
+    assert reasons == []
+
+
 def test_deterministic_workflow_status_pass():
     orchestrator = Orchestrator()
     assert (

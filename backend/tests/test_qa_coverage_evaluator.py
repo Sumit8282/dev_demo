@@ -188,6 +188,55 @@ def test_apply_coverage_constraints_rejects_fully_covered_without_mapped_test():
     assert result.coverage_matrix[0].coverage == "Not Covered"
 
 
+def test_apply_coverage_constraints_upgrades_partial_when_mapped_tests_pass():
+    result = apply_coverage_constraints(
+        QALLMValidationOutput(
+            status=ValidationStatus.FAIL,
+            coverage_matrix=[
+                QACoverageMatrixRow(
+                    ac_id="AC-02",
+                    acceptance_criterion="Clicking MCP Factory navigates to correct Demo URL.",
+                    test_cases="TC-002; TC-003",
+                    coverage="Partially Covered",
+                    test_result="Pass",
+                ),
+                QACoverageMatrixRow(
+                    ac_id="AC-03",
+                    acceptance_criterion="Clicking Competitor Intelligence navigates to correct Demo URL.",
+                    test_cases="TC-002; TC-003",
+                    coverage="Partially Covered",
+                    test_result="Pass",
+                ),
+            ],
+            errors=["One or more acceptance criteria are not fully covered: AC-02, AC-03."],
+        ),
+        acceptance_criteria=_criteria(
+            "All offering cards are clickable.",
+            "Clicking MCP Factory navigates to correct Demo URL.",
+            "Clicking Competitor Intelligence navigates to correct Demo URL.",
+        )[1:],
+        test_cases=[
+            QATestCase(
+                test_case_id="TC-002",
+                scenario="Verified each card opens the correct Demo URL.",
+                status="Pass",
+            ),
+            QATestCase(
+                test_case_id="TC-003",
+                scenario="Verified Demo URLs open successfully in a new tab.",
+                status="Pass",
+            ),
+        ],
+    )
+    assert result.status == ValidationStatus.PASS
+    assert [row.coverage for row in result.coverage_matrix] == [
+        "Fully Covered",
+        "Fully Covered",
+    ]
+    assert result.errors == []
+    assert result.acceptance_criteria_coverage_percent == 100.0
+
+
 def test_apply_coverage_constraints_empty_acs():
     result = apply_coverage_constraints(
         QALLMValidationOutput(status=ValidationStatus.PASS),

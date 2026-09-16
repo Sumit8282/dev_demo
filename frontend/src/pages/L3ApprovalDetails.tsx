@@ -8,12 +8,14 @@ import {
   rejectL3ReleaseApi,
   type L3ApprovalRequestInfo,
 } from '../api/releases';
+import GitHubIssuesCell from '../components/GitHubIssuesCell';
 import QaCoverageTable from '../components/QaCoverageTable';
 import QaGeneratedTestsTable from '../components/QaGeneratedTestsTable';
 import StatusBadge from '../components/StatusBadge';
 import { useAuth } from '../context/AuthContext';
 import { useReleases } from '../context/ReleaseContext';
-import type { QaCoverageRow, QaGeneratedTestRow, ValidationStatus } from '../types/release';
+import type { GitHubIssueLink, QaCoverageRow, QaGeneratedTestRow, ValidationStatus } from '../types/release';
+import { isGithubIssuesQa, mapGithubIssuesFromState } from '../utils/githubIssueLinks';
 import { mapQaCoverageRows, mapQaGeneratedTests } from '../utils/releaseMapper';
 
 export default function L3ApprovalDetails() {
@@ -23,6 +25,8 @@ export default function L3ApprovalDetails() {
   const { updateReleaseFromBackend } = useReleases();
   const [approval, setApproval] = useState<L3ApprovalRequestInfo | null>(null);
   const [qaCoverageRows, setQaCoverageRows] = useState<QaCoverageRow[]>([]);
+  const [githubIssues, setGithubIssues] = useState<GitHubIssueLink[]>([]);
+  const [qaMode, setQaMode] = useState('');
   const [qaGeneratedTests, setQaGeneratedTests] = useState<QaGeneratedTestRow[]>([]);
   const [qaGeneratedTestsRepo, setQaGeneratedTestsRepo] = useState('');
   const [qaGeneratedTestsSha, setQaGeneratedTestsSha] = useState('');
@@ -63,6 +67,8 @@ export default function L3ApprovalDetails() {
         const metadata = state.qa_validation?.metadata;
         const percent = metadata?.acceptance_criteria_coverage_percent;
         setQaCoverageRows(mapQaCoverageRows(state));
+        setGithubIssues(mapGithubIssuesFromState(state));
+        setQaMode(state.qa_mode ?? '');
         setQaGeneratedTests(mapQaGeneratedTests(state));
         setQaGeneratedTestsRepo(String(metadata?.generated_tests_repo ?? '').trim());
         setQaGeneratedTestsSha(String(metadata?.generated_tests_sha ?? '').trim());
@@ -230,16 +236,23 @@ export default function L3ApprovalDetails() {
                 </td>
               </tr>
               <tr>
-                <th>Jira Ticket</th>
+                <th>{isGithubIssuesQa(qaMode) ? 'GitHub Issues' : 'Jira Ticket'}</th>
                 <td colSpan={3}>
-                  <a
-                    href={approval.jira_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="link-muted"
-                  >
-                    {approval.jira_url} ({approval.jira_issue_key})
-                  </a>
+                  {isGithubIssuesQa(qaMode) ? (
+                    <GitHubIssuesCell issues={githubIssues} />
+                  ) : approval.jira_url ? (
+                    <a
+                      href={approval.jira_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="link-muted"
+                    >
+                      {approval.jira_url}
+                      {approval.jira_issue_key ? ` (${approval.jira_issue_key})` : ''}
+                    </a>
+                  ) : (
+                    '-'
+                  )}
                 </td>
               </tr>
               <tr>

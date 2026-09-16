@@ -279,3 +279,42 @@ async def test_recovers_when_llm_skips_jira_after_github_pass(sample_state, medi
     assert ctx.qa_validation is not None
     assert ctx.l3_flow is not None
     assert ctx.l3_flow["workflow_status"] == WorkflowStatus.L3_APPROVAL_PENDING.value
+
+
+@pytest.mark.asyncio
+async def test_skips_jira_when_qa_mode_is_github_issues(sample_state, medium_risk):
+    from app.agents.tools.orchestrator_tools import (
+        build_orchestrator_tools,
+        run_orchestrator_tool_sequence,
+    )
+    from app.agents.workflow_context import WorkflowRunContext
+    from app.models.validation import ValidationStatus
+
+    github_client = _open_pr_github_client()
+    jira_agent = stub_jira_agent()
+    qa_agent = stub_qa_agent()
+    state = {
+        **sample_state,
+        "qa_mode": "github_issues",
+        "jira_url": "",
+        "jira_issue_key": "",
+    }
+    orchestrator = Orchestrator(
+        jira_agent=jira_agent,
+        qa_agent=qa_agent,
+        github_client=github_client,
+    )
+    ctx = WorkflowRunContext(state=state)
+    tools = {item.name: item for item in build_orchestrator_tools(orchestrator, ctx)}
+
+    github_payload = await tools["validate_github_pull_request"].ainvoke({})
+    assert github_payload["next_action"] == "validate_qa_signoff"
+
+    with patch("app.agents.orchestrator.send_l3_approval_mail", return_value=True):
+        await run_orchestrator_tool_sequence(orchestrator, ctx)
+
+    jira_agent.validate.assert_not_awaited()
+    qa_agent.validate_async.assert_awaited_once()
+    assert ctx.jira_validation is None
+    assert ctx.qa_validation is not None
+    assert ctx.l3_flow is not None

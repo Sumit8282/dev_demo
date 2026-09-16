@@ -7,7 +7,7 @@ interface SearchBoxProps {
 export default function SearchBox({
   value,
   onChange,
-  placeholder = 'Search by Release ID, PR, JIRA, Developer, Status...',
+  placeholder = 'Search by Release ID, PR, Jira, GitHub issues, Developer, Status...',
 }: SearchBoxProps) {
   return (
     <div className="search-box">

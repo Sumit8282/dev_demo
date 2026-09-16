@@ -70,24 +70,74 @@ def extract_fix_versions(issue_data: dict[str, Any]) -> list[str]:
     return unique
 
 
+_ADF_BLOCK_TYPES = {
+    "blockquote",
+    "bulletList",
+    "codeBlock",
+    "expand",
+    "heading",
+    "listItem",
+    "mediaSingle",
+    "orderedList",
+    "panel",
+    "paragraph",
+    "rule",
+    "table",
+    "tableRow",
+    "taskItem",
+    "taskList",
+}
+
+_ADF_LIST_TYPES = {"bulletList", "orderedList", "taskList"}
+
+
+def _is_adf_block(value: Any) -> bool:
+    return isinstance(value, dict) and str(value.get("type") or "") in _ADF_BLOCK_TYPES
+
+
+def _adf_list_to_text(value: dict[str, Any]) -> str:
+    lines: list[str] = []
+    for item in value.get("content") or []:
+        text = _adf_to_plain_text(item).strip()
+        if not text:
+            continue
+        first_line = text.split("\n", 1)[0]
+        if not (_BULLET_PREFIX.match(first_line) or _AC_ID_PREFIX.match(first_line)):
+            text = f"- {text}"
+        lines.append(text)
+    return "\n".join(lines)
+
+
 def _adf_to_plain_text(value: Any) -> str:
     """Flatten Jira Atlassian Document Format (ADF) to plain text."""
     if isinstance(value, str):
-        return value.strip()
+        return value
     if isinstance(value, list):
-        return " ".join(part for part in (_adf_to_plain_text(item) for item in value) if part)
+        parts = [part for part in (_adf_to_plain_text(item) for item in value) if part]
+        if not parts:
+            return ""
+        joiner = "\n" if any(_is_adf_block(item) for item in value) else " "
+        return joiner.join(parts)
     if isinstance(value, dict):
+        node_type = str(value.get("type") or "")
+        if node_type == "hardBreak":
+            return "\n"
+        if node_type in _ADF_LIST_TYPES:
+            return _adf_list_to_text(value)
         parts: list[str] = []
         text = value.get("text")
         if isinstance(text, str) and text.strip():
-            parts.append(text.strip())
+            parts.append(text)
         for key in ("content", "paragraph", "body", "value"):
             nested = value.get(key)
             if nested is not None:
                 flattened = _adf_to_plain_text(nested)
                 if flattened:
                     parts.append(flattened)
-        return " ".join(parts)
+        if not parts:
+            return ""
+        joiner = "\n" if node_type in _ADF_BLOCK_TYPES else " "
+        return joiner.join(parts)
     return ""
 
 
@@ -102,6 +152,11 @@ _AC_SECTION_HEADERS = (
 _BULLET_PREFIX = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+")
 _AC_ID_PREFIX = re.compile(r"^\s*AC[-\s]?\d+\s*[:.)-]\s*", re.IGNORECASE)
 _CHECKBOX_PREFIX = re.compile(r"^\[(?: |x|X)\]\s+")
+_AC_HEADER_PREFIX = re.compile(
+    r"^(?:#{1,6}\s*)?(?:acceptance criteria|acceptance criterion|acceptance tests|testing criteria|test criteria)\s*:?\s*",
+    re.IGNORECASE,
+)
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[A-Z*])")
 
 
 def _section_header_key(line: str) -> str:
@@ -116,14 +171,33 @@ def _is_acceptance_criteria_header(line: str) -> bool:
     return key in _AC_SECTION_HEADERS or key.startswith("acceptance criteria")
 
 
+def _header_remainder(line: str) -> str:
+    remainder = _AC_HEADER_PREFIX.sub("", line.strip(), count=1).strip()
+    return remainder
+
+
 def _clean_criterion_text(line: str) -> str:
     current = _BULLET_PREFIX.sub("", line)
     current = _AC_ID_PREFIX.sub("", current).strip()
     return _CHECKBOX_PREFIX.sub("", current).strip()
 
 
+def _is_complete_sentence(text: str) -> bool:
+    stripped = text.rstrip()
+    return bool(stripped) and stripped[-1] in ".?!"
+
+
+def _is_item_start(line: str) -> bool:
+    return bool(_BULLET_PREFIX.match(line) or _AC_ID_PREFIX.match(line))
+
+
+def _split_requirement_sentences(text: str) -> list[str]:
+    parts = _SENTENCE_SPLIT.split(text.strip())
+    return [part.strip() for part in parts if part.strip()]
+
+
 def extract_acceptance_criteria(description: str | None) -> list[str]:
-    """Parse numbered or bulleted acceptance criteria from a Jira description."""
+    """Parse numbered, bulleted, or paragraph acceptance criteria from a Jira description."""
     if not description or not description.strip():
         return []
 
@@ -135,18 +209,23 @@ def extract_acceptance_criteria(description: str | None) -> list[str]:
         stripped = line.strip()
         if _is_acceptance_criteria_header(stripped):
             in_section = True
+            remainder = _header_remainder(stripped)
+            if remainder:
+                section_lines.append(remainder)
             continue
         if in_section:
             if not stripped:
-                if section_lines:
-                    break
                 continue
             if stripped.startswith("#"):
                 break
+            if _is_acceptance_criteria_header(stripped):
+                remainder = _header_remainder(stripped)
+                if remainder:
+                    section_lines.append(remainder)
+                continue
             lowered = stripped.lower().rstrip(":")
             if stripped.endswith(":") and lowered not in _AC_SECTION_HEADERS:
-                header = lowered[:-1]
-                if header in {"testing", "notes", "out of scope", "scope"}:
+                if lowered in {"testing", "notes", "out of scope", "scope", "test notes"}:
                     break
             section_lines.append(stripped)
 
@@ -156,14 +235,23 @@ def extract_acceptance_criteria(description: str | None) -> list[str]:
     criteria: list[str] = []
     current = ""
     for line in section_lines:
-        if _BULLET_PREFIX.match(line) or _AC_ID_PREFIX.match(line):
+        if _is_item_start(line):
             if current:
                 criteria.append(current.strip())
             current = _clean_criterion_text(line)
-        elif current:
-            current = f"{current} {line.strip()}".strip()
+            continue
+        cleaned = _clean_criterion_text(line)
+        if current and not _is_complete_sentence(current):
+            current = f"{current} {cleaned}".strip()
+            continue
+        if current:
+            criteria.append(current.strip())
+        pieces = _split_requirement_sentences(cleaned)
+        if len(pieces) > 1:
+            criteria.extend(pieces[:-1])
+            current = pieces[-1]
         else:
-            current = _clean_criterion_text(line)
+            current = pieces[0] if pieces else ""
     if current:
         criteria.append(current.strip())
 

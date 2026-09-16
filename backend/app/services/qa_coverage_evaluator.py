@@ -359,6 +359,9 @@ def _reconcile_row(
             test_result = "Failed"
         elif all(status == "Pass" for status in statuses):
             test_result = "Pass"
+            if coverage == PARTIALLY_COVERED:
+                coverage = FULLY_COVERED
+                evidence = evidence or "Mapped test cases passed."
         elif any(status.lower() in _INCOMPLETE_RESULTS or status in {
             "Not Executed",
             "Blocked",

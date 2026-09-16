@@ -689,6 +689,33 @@ a:hover {
   font-size: 14px;
 }
 
+.build-failure-banner {
+  border: 1px solid var(--color-rejected);
+  border-radius: 6px;
+  background: var(--color-rejected-bg);
+  padding: 16px 20px;
+}
+
+.build-failure-banner .section-title {
+  color: var(--color-rejected);
+  margin-bottom: 8px;
+}
+
+.build-failure-banner p {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.build-failure-next-actions {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 14px;
+}
+
+.build-failure-next-actions li {
+  margin-bottom: 6px;
+}
+
 .actions-cell {
   display: flex;
   gap: 6px;
@@ -746,6 +773,27 @@ a:hover {
   margin: 0 0 12px;
   font-size: 13px;
   color: var(--color-rejected);
+}
+
+.qa-gap-review {
+  margin: 0 0 16px;
+}
+
+.qa-gap-review-title {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.qa-gap-review-notes {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.qa-gap-review-table {
+  table-layout: auto;
+  min-width: 720px;
 }
 
 .qa-coverage-table {

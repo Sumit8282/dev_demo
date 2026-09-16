@@ -1,11 +1,13 @@
 import StatusBadge from './StatusBadge';
-import type { QaCoverageRow, ValidationStatus } from '../types/release';
+import type { QaCoverageRow, QaGapReviewUpdate, ValidationStatus } from '../types/release';
 
 interface QaCoverageTableProps {
   rows?: QaCoverageRow[];
   qaStatus?: ValidationStatus | null;
   coveragePercent?: number | null;
   errors?: string[];
+  gapReviewUpdates?: QaGapReviewUpdate[];
+  gapReviewNotes?: string;
 }
 
 function coverageBadgeStatus(coverage: string): string {
@@ -42,11 +44,15 @@ export default function QaCoverageTable({
   qaStatus = null,
   coveragePercent = null,
   errors = [],
+  gapReviewUpdates = [],
+  gapReviewNotes = '',
 }: QaCoverageTableProps) {
   const hasRun = Boolean(qaStatus || rows.length);
   if (!hasRun) {
     return null;
   }
+
+  const changedUpdates = gapReviewUpdates.filter((item) => item.changed);
 
   return (
     <section className="detail-section">
@@ -63,6 +69,36 @@ export default function QaCoverageTable({
       {errors.length > 0 && (
         <p className="qa-coverage-errors">{errors.join('; ')}</p>
       )}
+      {changedUpdates.length > 0 ? (
+        <div className="qa-gap-review">
+          <h4 className="qa-gap-review-title">Gap-review agent (one pass)</h4>
+          {gapReviewNotes ? <p className="qa-gap-review-notes">{gapReviewNotes}</p> : null}
+          <div className="table-container">
+            <table className="data-table qa-gap-review-table">
+              <thead>
+                <tr>
+                  <th>AC</th>
+                  <th>Before</th>
+                  <th>After</th>
+                  <th>Tests before</th>
+                  <th>Tests after</th>
+                </tr>
+              </thead>
+              <tbody>
+                {changedUpdates.map((item) => (
+                  <tr key={item.acId}>
+                    <td>{item.acId || '-'}</td>
+                    <td>{item.beforeCoverage || '-'}</td>
+                    <td>{item.afterCoverage || '-'}</td>
+                    <td>{item.beforeTestCases || '-'}</td>
+                    <td>{item.afterTestCases || '-'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
       <div className="table-container">
         <table className="data-table qa-coverage-table">
           <thead>

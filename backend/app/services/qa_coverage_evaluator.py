@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Iterable
+from typing import Any, Iterable
 
 from app.models.qa_llm_validation import (
     QAAcceptanceCriterion,
@@ -70,6 +70,8 @@ _STATUS_WORD = re.compile(
     re.IGNORECASE,
 )
 _AC_ID = re.compile(r"AC-(\d+)", re.IGNORECASE)
+
+GAP_REVIEW_COVERAGES = {NOT_COVERED, PARTIALLY_COVERED, UNABLE_TO_DETERMINE}
 
 
 def normalize_coverage(value: str | None) -> str:
@@ -404,6 +406,119 @@ def _index_llm_rows(
         if ac_id and ac_id not in indexed:
             indexed[ac_id] = row
     return indexed
+
+
+def select_gap_review_rows(
+    coverage_matrix: list[QACoverageMatrixRow],
+) -> list[QACoverageMatrixRow]:
+    """Rows the gap-review agent may remap. Covered-but-failed stays a hard fail."""
+    return [
+        row
+        for row in coverage_matrix
+        if normalize_coverage(row.coverage) in GAP_REVIEW_COVERAGES
+    ]
+
+
+def overlay_gap_review_rows(
+    coverage_matrix: list[QACoverageMatrixRow],
+    reviewed: list[QACoverageMatrixRow],
+) -> list[QACoverageMatrixRow]:
+    """Replace gap rows by ac_id. Never add or drop acceptance criteria."""
+    allowed = {
+        normalize_ac_id(row.ac_id): row
+        for row in coverage_matrix
+        if normalize_ac_id(row.ac_id)
+    }
+    replacements: dict[str, QACoverageMatrixRow] = {}
+    for row in reviewed:
+        ac_id = normalize_ac_id(row.ac_id)
+        if ac_id and ac_id in allowed and ac_id not in replacements:
+            replacements[ac_id] = row
+
+    overlaid: list[QACoverageMatrixRow] = []
+    for row in coverage_matrix:
+        ac_id = normalize_ac_id(row.ac_id)
+        replacement = replacements.get(ac_id)
+        if replacement is None:
+            overlaid.append(row)
+            continue
+        overlaid.append(
+            QACoverageMatrixRow(
+                ac_id=row.ac_id,
+                acceptance_criterion=row.acceptance_criterion,
+                test_cases=replacement.test_cases,
+                coverage=replacement.coverage,
+                test_result=replacement.test_result,
+                evidence_reason=replacement.evidence_reason,
+            )
+        )
+    return overlaid
+
+
+def gap_review_audit(
+    before: list[QACoverageMatrixRow],
+    after: list[QACoverageMatrixRow],
+) -> list[dict[str, Any]]:
+    """Per-AC before/after snapshot so gap-review edits can be tracked."""
+    after_by_id = {
+        normalize_ac_id(row.ac_id): row
+        for row in after
+        if normalize_ac_id(row.ac_id)
+    }
+    updates: list[dict[str, Any]] = []
+    for row in before:
+        ac_id = normalize_ac_id(row.ac_id)
+        nxt = after_by_id.get(ac_id)
+        if nxt is None:
+            continue
+        changed = (
+            normalize_coverage(row.coverage) != normalize_coverage(nxt.coverage)
+            or row.test_cases.strip() != nxt.test_cases.strip()
+            or normalize_test_result(row.test_result)
+            != normalize_test_result(nxt.test_result)
+            or _strip_gap_review_tag(row.evidence_reason)
+            != _strip_gap_review_tag(nxt.evidence_reason)
+        )
+        updates.append(
+            {
+                "ac_id": ac_id,
+                "changed": changed,
+                "before_coverage": row.coverage,
+                "after_coverage": nxt.coverage,
+                "before_test_cases": row.test_cases,
+                "after_test_cases": nxt.test_cases,
+                "before_test_result": row.test_result,
+                "after_test_result": nxt.test_result,
+                "before_evidence_reason": row.evidence_reason,
+                "after_evidence_reason": nxt.evidence_reason,
+            }
+        )
+    return updates
+
+
+def tag_gap_review_evidence(
+    coverage_matrix: list[QACoverageMatrixRow],
+    changed_ac_ids: set[str],
+) -> None:
+    for row in coverage_matrix:
+        ac_id = normalize_ac_id(row.ac_id)
+        if ac_id not in changed_ac_ids:
+            continue
+        reason = row.evidence_reason.strip()
+        if reason.startswith("[gap-review]"):
+            continue
+        row.evidence_reason = f"[gap-review] {reason}".strip()
+
+
+def _strip_gap_review_tag(value: str | None) -> str:
+    text = str(value or "").strip()
+    if text.lower().startswith("[gap-review]"):
+        return text.split("]", 1)[-1].strip()
+    return text
+
+
+def normalize_ac_id(value: str | None) -> str:
+    return _normalize_ac_id(value)
 
 
 def _normalize_ac_id(value: str | None) -> str:

@@ -118,6 +118,37 @@ export default function ReleaseDetails() {
         </Link>
       </div>
 
+      {release.backendWorkflowStatus === 'BUILD_FAILED' && (
+        <section className="detail-section build-failure-banner" role="alert">
+          <h3 className="section-title">Build failed</h3>
+          <p>
+            <strong>What failed:</strong>{' '}
+            {release.buildFailureReason || 'CI/CD pipeline failed'}
+          </p>
+          {release.buildJobUrl && (
+            <p>
+              <strong>CI run:</strong>{' '}
+              <a
+                href={release.buildJobUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="link-muted"
+              >
+                {release.buildJobUrl}
+              </a>
+            </p>
+          )}
+          <p>
+            <strong>Next actions:</strong>
+          </p>
+          <ol className="build-failure-next-actions">
+            {(release.buildNextActions ?? []).map((step) => (
+              <li key={step}>{step}</li>
+            ))}
+          </ol>
+        </section>
+      )}
+
       <section className="detail-section">
         <h3 className="section-title">Release Information</h3>
         <div className="table-container">
@@ -212,6 +243,8 @@ export default function ReleaseDetails() {
         qaStatus={release.qaValidationStatus}
         coveragePercent={release.qaCoveragePercent}
         errors={release.qaValidationErrors}
+        gapReviewUpdates={release.qaGapReviewUpdates}
+        gapReviewNotes={release.qaGapReviewNotes}
       />
 
       <QaGeneratedTestsTable

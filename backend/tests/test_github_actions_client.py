@@ -1,6 +1,6 @@
 """Tests for the GitHub Actions release-build client."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from pydantic import SecretStr
@@ -131,6 +131,74 @@ async def test_dispatch_then_poll():
     )
     result = await client.run_release_build(_state())
     assert result.status == BuildStatus.COMPLETED
+    await client.aclose()
+
+
+async def test_dispatch_matches_run_created_before_local_clock():
+    created = (datetime.now(timezone.utc) - timedelta(seconds=90)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path.endswith("/dispatches"):
+            return httpx.Response(204)
+        if request.url.path.endswith("/actions/workflows/release-build.yml/runs"):
+            return httpx.Response(
+                200,
+                json={
+                    "workflow_runs": [
+                        _run(
+                            status="in_progress",
+                            created_at=created,
+                            event="workflow_dispatch",
+                            head_branch="release/v2.4.0",
+                        )
+                    ]
+                },
+            )
+        if request.url.path.endswith("/actions/runs/44"):
+            return httpx.Response(200, json=_run())
+        return httpx.Response(404, text="missing")
+
+    client = GitHubActionsClient(
+        _settings(CI_TRIGGER_MODE="dispatch"),
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    result = await client.run_release_build(_state())
+    assert result.status == BuildStatus.COMPLETED
+    assert result.build_id == "GHA-44"
+    await client.aclose()
+
+
+async def test_dispatch_falls_back_to_push_run():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path.endswith("/dispatches"):
+            return httpx.Response(204)
+        if request.url.path.endswith("/actions/workflows/release-build.yml/runs"):
+            return httpx.Response(
+                200,
+                json={
+                    "workflow_runs": [
+                        _run(
+                            status="in_progress",
+                            created_at=datetime.now(timezone.utc).isoformat(),
+                            event="push",
+                            head_branch="release/v2.4.0",
+                        )
+                    ]
+                },
+            )
+        if request.url.path.endswith("/actions/runs/44"):
+            return httpx.Response(200, json=_run())
+        return httpx.Response(404, text="missing")
+
+    client = GitHubActionsClient(
+        _settings(CI_TRIGGER_MODE="dispatch"),
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    result = await client.run_release_build(_state())
+    assert result.status == BuildStatus.COMPLETED
+    assert result.build_id == "GHA-44"
     await client.aclose()
 
 

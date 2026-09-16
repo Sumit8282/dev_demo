@@ -1,8 +1,9 @@
 import type { BackendReleaseState } from '../api/releases';
 import { BACKEND_POST_MERGE_STATUSES } from '../api/releases';
-import type { QaCoverageRow, QaGeneratedTestRow, Release, StatusType, WorkflowActivity, WorkflowStep } from '../types/release';
+import type { QaCoverageRow, QaGapReviewUpdate, QaGeneratedTestRow, Release, StatusType, WorkflowActivity, WorkflowStep } from '../types/release';
 import type { WorkflowEvent } from '../types/workflowEvent';
 import { mapGithubIssuesFromState } from './githubIssueLinks';
+import { buildFailureNextActions } from './buildFailureGuidance';
 import { formatDate, formatTime } from './helpers';
 import { formatJiraValidationRemarks } from './jiraValidationMessages';
 
@@ -546,6 +547,34 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+export function mapQaGapReviewUpdates(state: BackendReleaseState): {
+  notes: string;
+  updates: QaGapReviewUpdate[];
+} {
+  const qaMeta = asRecord(state.qa_validation?.metadata);
+  const audit = asRecord(qaMeta?.gap_review);
+  const notes = String(audit?.notes ?? '').trim();
+  const raw = audit?.updates;
+  if (!Array.isArray(raw)) {
+    return { notes, updates: [] };
+  }
+  const updates = raw.flatMap((item) => {
+    const row = asRecord(item);
+    if (!row) return [];
+    return [
+      {
+        acId: String(row.ac_id ?? '').trim(),
+        changed: Boolean(row.changed),
+        beforeCoverage: String(row.before_coverage ?? '').trim(),
+        afterCoverage: String(row.after_coverage ?? '').trim(),
+        beforeTestCases: String(row.before_test_cases ?? '').trim(),
+        afterTestCases: String(row.after_test_cases ?? '').trim(),
+      },
+    ];
+  });
+  return { notes, updates };
+}
+
 export function mapQaCoverageRows(state: BackendReleaseState): QaCoverageRow[] {
   const qaMeta = asRecord(state.qa_validation?.metadata);
   const githubMeta = asRecord(state.github_validation?.metadata);
@@ -699,6 +728,7 @@ export function mapBackendToRelease(
 ): Release {
   const { status, currentStage } = mapWorkflowStatus(state);
   const createdBy = state.created_by?.trim() || createdByFallback;
+  const gapReview = mapQaGapReviewUpdates(state);
 
   return {
     id: state.release_id,
@@ -717,6 +747,25 @@ export function mapBackendToRelease(
     createdBy,
     createdDate: formatBackendDate(state.created_at),
     buildId: state.build_result?.build_id ?? '',
+    buildFailureReason:
+      state.workflow_status === 'BUILD_FAILED'
+        ? state.build_result?.failure_reason ||
+          state.failure_reasons?.[0] ||
+          'CI/CD pipeline failed'
+        : undefined,
+    buildJobUrl:
+      state.workflow_status === 'BUILD_FAILED'
+        ? state.build_result?.job_url ?? undefined
+        : undefined,
+    buildNextActions:
+      state.workflow_status === 'BUILD_FAILED'
+        ? buildFailureNextActions(
+            state.build_result?.failure_reason ||
+              state.failure_reasons?.[0] ||
+              'CI/CD pipeline failed',
+            state.build_result?.job_url
+          )
+        : undefined,
     deploymentStatus:
       state.workflow_status === 'DEPLOYMENT_COMPLETED'
         ? 'Deployment Successful'
@@ -733,6 +782,8 @@ export function mapBackendToRelease(
     qaValidationErrors: state.qa_validation?.errors ?? [],
     qaCoverageRows: mapQaCoverageRows(state),
     qaCoveragePercent: mapQaCoveragePercent(state),
+    qaGapReviewUpdates: gapReview.updates,
+    qaGapReviewNotes: gapReview.notes,
     qaGeneratedTests: mapQaGeneratedTests(state),
     qaGeneratedTestsRepo: String(asRecord(state.qa_validation?.metadata)?.generated_tests_repo ?? '').trim(),
     qaGeneratedTestsSha: String(asRecord(state.qa_validation?.metadata)?.generated_tests_sha ?? '').trim(),

@@ -11,6 +11,7 @@ from app.models.qa_llm_validation import (
     QACoverageMatrixRow,
     QADraftTest,
     QADraftTestBundle,
+    QAGapReviewBundle,
     QAGeneratedTest,
     QAGeneratedTestBundle,
     QALLMValidationOutput,
@@ -56,6 +57,7 @@ def _hybrid_invoke(
     *,
     test_cases: list[QATestCase] | None = None,
     ac_extract: QAAcceptanceCriteriaExtract | None = None,
+    gap_review: QAGapReviewBundle | None = None,
     captured: dict[str, object] | None = None,
 ):
     async def fake_invoke(agent, *, user_message, response_model):
@@ -77,6 +79,8 @@ def _hybrid_invoke(
             return ac_extract or QAAcceptanceCriteriaExtract(
                 no_acceptance_criteria_found=True
             )
+        if response_model is QAGapReviewBundle:
+            return gap_review if gap_review is not None else QAGapReviewBundle()
         if response_model is QADraftTestBundle:
             return QADraftTestBundle(
                 drafts=[
@@ -389,7 +393,7 @@ async def test_qa_agent_errors_when_test_case_extract_fails():
         result = await agent.validate_async(
             release_id="REL-1",
             qa_signoff_required=True,
-            environment="UAT",
+            environment="T",
             release_version="v1.0.0",
             qa_signoff_attachment={"filename": "qa-signoff.docx"},
             jira_issue_key="SCRUM-6",
@@ -441,7 +445,7 @@ async def test_qa_agent_overrides_false_pass_when_ac_is_omitted():
         result = await agent.validate_async(
             release_id="REL-1",
             qa_signoff_required=True,
-            environment="UAT",
+            environment="T",
             release_version="v1.0.0",
             qa_signoff_attachment={"filename": "qa-signoff.docx"},
             jira_issue_key="SCRUM-13",
@@ -460,6 +464,165 @@ async def test_qa_agent_overrides_false_pass_when_ac_is_omitted():
     assert len(result.metadata["coverage_matrix"]) == 2
     assert result.metadata["coverage_matrix"][1]["coverage"] == "Not Covered"
     assert any("not fully covered" in error.lower() for error in result.errors)
+
+
+@pytest.mark.asyncio
+async def test_qa_agent_gap_review_remaps_omitted_ac_once_and_tracks_updates():
+    signoff_service = MagicMock(spec=QASignoffService)
+    signoff_service.load_qa_document_text.return_value = (
+        "qa-signoff.docx",
+        "TC-001 Remove Offerings — Passed\nTC-002 Keep other dropdown options — Passed",
+    )
+    settings = MagicMock()
+    settings.llm_enabled = True
+    agent = QAAgent(signoff_service=signoff_service, settings=settings)
+    agent._generated_test_runner.run = _passthrough_generated_run
+    false_pass = QALLMValidationOutput(
+        status=ValidationStatus.PASS,
+        validation_summary="## QA Validation Summary\n\n**Overall Status:** PASS",
+        coverage_matrix=[
+            QACoverageMatrixRow(
+                ac_id="AC-01",
+                acceptance_criterion="Remove the Offerings option from the dropdown menu.",
+                test_cases="TC-001",
+                coverage="Fully Covered",
+                test_result="Pass",
+            )
+        ],
+        acceptance_criteria_coverage_percent=100.0,
+        passed_acceptance_criteria_percent=100.0,
+    )
+    gap_review = QAGapReviewBundle(
+        coverage_matrix=[
+            QACoverageMatrixRow(
+                ac_id="AC-02",
+                acceptance_criterion="Keep other dropdown options unchanged.",
+                test_cases="TC-002",
+                coverage="Fully Covered",
+                test_result="Pass",
+                evidence_reason="TC-002 verifies other dropdown options remain.",
+            )
+        ],
+        review_notes="Mapped omitted AC-02 to TC-002. Left AC-01 unchanged.",
+    )
+    captured: dict[str, object] = {}
+
+    with patch.object(agent, "build_langchain_agent", return_value=MagicMock()), patch.object(
+        agent, "build_tc_extract_agent", return_value=MagicMock()
+    ), patch.object(
+        agent, "build_generated_test_agent", return_value=MagicMock()
+    ), patch.object(
+        agent, "build_gap_review_agent", return_value=MagicMock()
+    ), patch(
+        "app.agents.qa_agent.invoke_structured_agent",
+        new=_hybrid_invoke(
+            false_pass,
+            test_cases=[
+                QATestCase(
+                    test_case_id="TC-001",
+                    scenario="Remove Offerings",
+                    status="Passed",
+                ),
+                QATestCase(
+                    test_case_id="TC-002",
+                    scenario="Keep other dropdown options unchanged",
+                    status="Passed",
+                ),
+            ],
+            gap_review=gap_review,
+            captured=captured,
+        ),
+    ):
+        result = await agent.validate_async(
+            release_id="REL-1",
+            qa_signoff_required=True,
+            environment="T",
+            release_version="v1.0.0",
+            qa_signoff_attachment={"filename": "qa-signoff.docx"},
+            jira_issue_key="SCRUM-13",
+            jira_validation={
+                "metadata": {
+                    "acceptance_criteria": [
+                        "Remove the Offerings option from the dropdown menu.",
+                        "Keep other dropdown options unchanged.",
+                    ]
+                }
+            },
+        )
+
+    assert result.status == ValidationStatus.PASS
+    assert captured["models"].count(QAGapReviewBundle) == 1
+    audit = result.metadata["gap_review"]
+    assert audit["ran"] is True
+    assert audit["stopped"] is True
+    assert audit["attempted_ac_ids"] == ["AC-02"]
+    assert audit["notes"].startswith("Mapped omitted AC-02")
+    changed = [item for item in audit["updates"] if item["changed"]]
+    assert len(changed) == 1
+    assert changed[0]["ac_id"] == "AC-02"
+    assert changed[0]["before_coverage"] == "Not Covered"
+    assert changed[0]["after_coverage"] == "Fully Covered"
+    assert changed[0]["after_test_cases"] == "TC-002"
+    assert result.metadata["coverage_matrix"][1]["evidence_reason"].startswith("[gap-review]")
+    assert "AC-02" in captured["QAGapReviewBundle"]
+    assert "Keep other dropdown options" in captured["QAGapReviewBundle"]
+
+
+@pytest.mark.asyncio
+async def test_qa_agent_gap_review_stops_after_one_pass_when_still_uncovered():
+    signoff_service = MagicMock(spec=QASignoffService)
+    signoff_service.load_qa_document_text.return_value = (
+        "qa-signoff.docx",
+        "TC-001 Remove Offerings — Passed",
+    )
+    settings = MagicMock()
+    settings.llm_enabled = True
+    agent = QAAgent(signoff_service=signoff_service, settings=settings)
+    captured: dict[str, object] = {}
+    false_pass = QALLMValidationOutput(
+        status=ValidationStatus.PASS,
+        coverage_matrix=[
+            QACoverageMatrixRow(
+                ac_id="AC-01",
+                acceptance_criterion="Remove the Offerings option from the dropdown menu.",
+                test_cases="TC-001",
+                coverage="Fully Covered",
+                test_result="Pass",
+            )
+        ],
+    )
+
+    with patch.object(agent, "build_langchain_agent", return_value=MagicMock()), patch.object(
+        agent, "build_tc_extract_agent", return_value=MagicMock()
+    ), patch.object(
+        agent, "build_generated_test_agent", return_value=MagicMock()
+    ), patch.object(
+        agent, "build_gap_review_agent", return_value=MagicMock()
+    ), patch(
+        "app.agents.qa_agent.invoke_structured_agent",
+        new=_hybrid_invoke(false_pass, captured=captured),
+    ):
+        result = await agent.validate_async(
+            release_id="REL-1",
+            qa_signoff_required=True,
+            environment="T",
+            release_version="v1.0.0",
+            qa_signoff_attachment={"filename": "qa-signoff.docx"},
+            jira_issue_key="SCRUM-13",
+            jira_validation={
+                "metadata": {
+                    "acceptance_criteria": [
+                        "Remove the Offerings option from the dropdown menu.",
+                        "Keep other dropdown options unchanged.",
+                    ]
+                }
+            },
+        )
+
+    assert result.status == ValidationStatus.FAIL
+    assert captured["models"].count(QAGapReviewBundle) == 1
+    assert result.metadata["gap_review"]["stopped"] is True
+    assert result.metadata["coverage_matrix"][1]["coverage"] == "Not Covered"
 
 
 def _pr_github_validation():
@@ -499,7 +662,7 @@ async def test_qa_agent_pr_tests_lane1_pass():
             release_id="REL-1",
             qa_signoff_required=True,
             qa_mode="pr_tests",
-            environment="UAT",
+            environment="T",
             release_version="v1.0.0",
             pr_title="Remove Offerings",
             jira_issue_key="SCRUM-6",
@@ -558,7 +721,7 @@ async def test_qa_agent_pr_tests_lane2_drafts_when_coverage_fails():
             release_id="REL-1",
             qa_signoff_required=True,
             qa_mode="pr_tests",
-            environment="UAT",
+            environment="T",
             release_version="v1.0.0",
             jira_issue_key="SCRUM-6",
             jira_validation={
@@ -621,7 +784,7 @@ async def test_qa_agent_pr_tests_uses_writeup_and_repo_tests():
             release_id="REL-1",
             qa_signoff_required=True,
             qa_mode="pr_tests",
-            environment="UAT",
+            environment="T",
             release_version="v1.0.0",
             pr_title="Remove Offerings",
             jira_issue_key="SCRUM-6",
@@ -673,7 +836,7 @@ async def test_qa_agent_pr_tests_fails_when_ci_failed():
             release_id="REL-1",
             qa_signoff_required=True,
             qa_mode="pr_tests",
-            environment="UAT",
+            environment="T",
             release_version="v1.0.0",
             jira_issue_key="SCRUM-6",
             jira_validation={
@@ -728,7 +891,7 @@ async def test_qa_agent_github_issues_fails_when_none_linked():
         release_id="REL-1",
         qa_signoff_required=True,
         qa_mode="github_issues",
-        environment="UAT",
+        environment="T",
         release_version="v1.0.0",
         github_validation=_pr_github_validation(),
     )
@@ -769,7 +932,7 @@ async def test_qa_agent_github_issues_lane1_pass():
             release_id="REL-1",
             qa_signoff_required=True,
             qa_mode="github_issues",
-            environment="UAT",
+            environment="T",
             release_version="v1.0.0",
             pr_title="Remove Offerings",
             jira_issue_key="SCRUM-6",

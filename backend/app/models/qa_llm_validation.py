@@ -67,6 +67,11 @@ class QAGeneratedTestBundle(BaseModel):
     tests: list[QAGeneratedTest] = Field(default_factory=list)
 
 
+class QAGapReviewBundle(BaseModel):
+    coverage_matrix: list[QACoverageMatrixRow] = Field(default_factory=list)
+    review_notes: str = ""
+
+
 class QALLMValidationOutput(BaseModel):
     status: ValidationStatus
     validation_summary: str = ""

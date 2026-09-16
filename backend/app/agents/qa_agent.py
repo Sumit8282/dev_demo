@@ -15,7 +15,9 @@ from app.mcp.jira_mcp import JiraMCPClient
 from app.models.qa_llm_validation import (
     QAAcceptanceCriteriaExtract,
     QAAcceptanceCriterion,
+    QACoverageMatrixRow,
     QADraftTestBundle,
+    QAGapReviewBundle,
     QAGeneratedTest,
     QAGeneratedTestBundle,
     QALLMValidationOutput,
@@ -29,7 +31,11 @@ from app.services.qa_coverage_evaluator import (
     apply_coverage_constraints,
     extract_test_cases_from_text,
     format_signoff_facts,
+    gap_review_audit,
     merge_test_cases,
+    overlay_gap_review_rows,
+    select_gap_review_rows,
+    tag_gap_review_evidence,
     normalize_test_result,
 )
 from app.services.generated_test_runner import GeneratedTestRunner
@@ -286,7 +292,15 @@ class QAAgent:
             acceptance_criteria=extracted_acs,
             test_cases=extracted_tests,
             signoff=signoff,
-            )
+        )
+        llm_result = await self._apply_one_gap_review(
+            llm_result,
+            acceptance_criteria=extracted_acs,
+            test_cases=extracted_tests,
+            signoff=signoff,
+            metadata=metadata,
+            jira_issue_key=jira_issue_key,
+        )
 
         result = _to_qa_validation_result(
             llm_result,
@@ -571,6 +585,14 @@ class QAAgent:
             acceptance_criteria=extracted_acs,
             test_cases=extracted_tests,
             signoff=None,
+        )
+        llm_result = await self._apply_one_gap_review(
+            llm_result,
+            acceptance_criteria=extracted_acs,
+            test_cases=extracted_tests,
+            signoff=None,
+            metadata=metadata,
+            jira_issue_key=jira_issue_key,
         )
         if ci_status.lower() == "failure":
             llm_result.status = ValidationStatus.FAIL
@@ -899,6 +921,97 @@ class QAAgent:
             response_model=QALLMValidationOutput,
         )
 
+    async def _apply_one_gap_review(
+        self,
+        llm_result: QALLMValidationOutput,
+        *,
+        acceptance_criteria: list[QAAcceptanceCriterion],
+        test_cases: list[QATestCase],
+        signoff: SignOffRequest | None,
+        metadata: dict[str, Any],
+        jira_issue_key: str | None,
+    ) -> QALLMValidationOutput:
+        """Remap gap rows once, constrain again, then stop."""
+        gaps = select_gap_review_rows(llm_result.coverage_matrix)
+        audit: dict[str, Any] = {
+            "ran": False,
+            "stopped": True,
+            "attempted_ac_ids": [row.ac_id for row in gaps],
+            "updates": [],
+            "notes": "",
+            "skipped_reason": "",
+        }
+        if not gaps:
+            audit["skipped_reason"] = "no_gaps"
+            metadata["gap_review"] = audit
+            return llm_result
+
+        agent = self.build_gap_review_agent()
+        if agent is None:
+            audit["skipped_reason"] = "agent_unavailable"
+            metadata["gap_review"] = audit
+            return llm_result
+
+        before = [row.model_copy(deep=True) for row in llm_result.coverage_matrix]
+        reviewed = await self._run_gap_review(
+            agent=agent,
+            gaps=gaps,
+            test_cases=test_cases,
+            jira_issue_key=jira_issue_key,
+        )
+        audit["ran"] = True
+        if reviewed is None:
+            audit["skipped_reason"] = "no_structured_response"
+            metadata["gap_review"] = audit
+            logger.info("[QA_AGENT] Gap review returned no structured response; stopping")
+            return llm_result
+
+        audit["notes"] = reviewed.review_notes
+        llm_result.coverage_matrix = overlay_gap_review_rows(
+            llm_result.coverage_matrix,
+            reviewed.coverage_matrix,
+        )
+        llm_result = apply_coverage_constraints(
+            llm_result,
+            acceptance_criteria=acceptance_criteria,
+            test_cases=test_cases,
+            signoff=signoff,
+        )
+        audit["updates"] = gap_review_audit(before, llm_result.coverage_matrix)
+        changed_ids = {
+            str(item["ac_id"])
+            for item in audit["updates"]
+            if item.get("changed")
+        }
+        tag_gap_review_evidence(llm_result.coverage_matrix, changed_ids)
+        metadata["gap_review"] = audit
+        logger.info(
+            "[QA_AGENT] Gap review stopped after one pass attempted=%s changed=%s",
+            audit["attempted_ac_ids"],
+            sorted(changed_ids),
+        )
+        return llm_result
+
+    async def _run_gap_review(
+        self,
+        *,
+        agent: Any,
+        gaps: list[QACoverageMatrixRow],
+        test_cases: list[QATestCase],
+        jira_issue_key: str | None,
+    ) -> QAGapReviewBundle | None:
+        user_message = format_prompt(
+            "qa_gap_review_user",
+            jira_issue_key=(jira_issue_key or "").strip() or "(not provided)",
+            gap_rows=_format_gap_rows(gaps),
+            test_cases=_format_test_cases(test_cases),
+        )
+        return await invoke_structured_agent(
+            agent,
+            user_message=user_message,
+            response_model=QAGapReviewBundle,
+        )
+
     async def _prefetch_jira_acceptance_criteria(
         self,
         issue_key: str,
@@ -966,6 +1079,16 @@ class QAAgent:
             system_prompt=load_prompt("qa_agent_system"),
             name="qa_agent",
             response_format=QALLMValidationOutput,
+            llm=llm,
+        )
+
+    def build_gap_review_agent(self, llm: BaseChatModel | None = None):
+        return create_qa_deep_agent(
+            settings=self.settings,
+            tools=[],
+            system_prompt=load_prompt("qa_gap_review_system"),
+            name="qa_gap_review_agent",
+            response_format=QAGapReviewBundle,
             llm=llm,
         )
 
@@ -1114,6 +1237,19 @@ def _unique_criteria(items: list[str]) -> list[str]:
         seen.add(key)
         unique.append(text)
     return unique
+
+
+def _format_gap_rows(rows: list[QACoverageMatrixRow]) -> str:
+    if not rows:
+        return "No gap rows."
+    lines: list[str] = []
+    for row in rows:
+        lines.append(f"- {row.ac_id}: {row.acceptance_criterion}")
+        lines.append(f"  Current coverage: {row.coverage}")
+        lines.append(f"  Mapped tests: {row.test_cases or '(none)'}")
+        lines.append(f"  Test result: {row.test_result or '(none)'}")
+        lines.append(f"  Evidence: {row.evidence_reason or '(none)'}")
+    return "\n".join(lines)
 
 
 def _format_acceptance_criteria(criteria: list[QAAcceptanceCriterion]) -> str:

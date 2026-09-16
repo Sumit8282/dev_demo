@@ -41,6 +41,15 @@ export interface QaCoverageRow {
   reason: string;
 }
 
+export interface QaGapReviewUpdate {
+  acId: string;
+  changed: boolean;
+  beforeCoverage: string;
+  afterCoverage: string;
+  beforeTestCases: string;
+  afterTestCases: string;
+}
+
 export interface QaGeneratedTestRow {
   acId: string;
   generatedTest: string;
@@ -76,6 +85,9 @@ export interface Release {
   createdBy: string;
   createdDate: string;
   buildId: string;
+  buildFailureReason?: string;
+  buildJobUrl?: string;
+  buildNextActions?: string[];
   deploymentStatus: string;
   workflowActivities: WorkflowActivity[];
   workflowEvents: WorkflowEvent[];
@@ -87,6 +99,8 @@ export interface Release {
   qaValidationErrors?: string[];
   qaCoverageRows?: QaCoverageRow[];
   qaCoveragePercent?: number | null;
+  qaGapReviewUpdates?: QaGapReviewUpdate[];
+  qaGapReviewNotes?: string;
   qaGeneratedTests?: QaGeneratedTestRow[];
   qaGeneratedTestsRepo?: string;
   qaGeneratedTestsSha?: string;

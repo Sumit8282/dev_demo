@@ -6,7 +6,7 @@ import asyncio
 import logging
 import inspect
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -429,11 +429,32 @@ class GitHubActionsClient:
                 owner,
                 repo,
                 workflow=workflow,
-                event="workflow_dispatch",
             )
-            match = _newest_run_since(runs, dispatched_at, merge_sha)
+            if runs:
+                sample = runs[0]
+                logger.info(
+                    "[GITHUB_ACTIONS] Listed %s run(s); newest id=%s event=%s "
+                    "created_at=%s head_sha=%s dispatched_at=%s merge_sha=%s",
+                    len(runs),
+                    sample.get("id"),
+                    sample.get("event"),
+                    sample.get("created_at"),
+                    sample.get("head_sha"),
+                    dispatched_at.isoformat(),
+                    merge_sha,
+                )
+            match = _newest_run_since(
+                runs,
+                dispatched_at,
+                merge_sha,
+                require_dispatch_event=True,
+            )
             if match is None:
-                match = _newest_run_since(runs, dispatched_at, None)
+                match = _newest_run_since(
+                    runs, dispatched_at, merge_sha, branch=ref
+                )
+            if match is None:
+                match = _newest_run_since(runs, dispatched_at, None, branch=ref)
             if match:
                 return match
             if asyncio.get_running_loop().time() >= deadline:
@@ -522,17 +543,30 @@ def _merge_sha(state: ReleaseState) -> str | None:
     return str(sha) if sha else None
 
 
+_DISCOVER_SLACK = timedelta(minutes=2)
+
+
 def _newest_run_since(
     runs: list[dict[str, Any]],
     dispatched_at: datetime,
     merge_sha: str | None,
+    *,
+    require_dispatch_event: bool = False,
+    branch: str | None = None,
 ) -> dict[str, Any] | None:
+    earliest = dispatched_at - _DISCOVER_SLACK
     matches: list[dict[str, Any]] = []
     for run in runs:
+        if require_dispatch_event and str(run.get("event") or "") != "workflow_dispatch":
+            continue
         if merge_sha and run.get("head_sha") and run.get("head_sha") != merge_sha:
             continue
+        if branch:
+            run_branch = str(run.get("head_branch") or "")
+            if run_branch and run_branch != branch:
+                continue
         created = _parse_github_datetime(run.get("created_at"))
-        if created is not None and created < dispatched_at:
+        if created is not None and created < earliest:
             continue
         matches.append(run)
     return matches[0] if matches else None

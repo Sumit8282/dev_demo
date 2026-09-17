@@ -56,7 +56,7 @@ SOURCE_HELPER_PATH = "tests/generated/_qa_source.py"
 SOURCE_HELPER_CODE = '''from pathlib import Path
 
 SKIP = {"node_modules", "dist", "build", ".git", "coverage", ".next", "vendor"}
-EXTS = {".ts", ".tsx", ".js", ".jsx", ".py", ".json", ".html", ".vue"}
+EXTS = {".ts", ".tsx", ".js", ".jsx", ".py", ".json", ".html", ".vue", ".java", ".xml", ".properties", ".yml", ".yaml"}
 
 
 def _compact(value: str) -> str:

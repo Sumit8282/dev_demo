@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Resolve .env relative to backend/ so uvicorn finds it regardless of CWD.
@@ -48,9 +48,17 @@ class Settings(BaseSettings):
     )
     jira_cloud_id: str = Field(default="", alias="JIRA_CLOUD_ID")
 
+    github_account: Literal["default", "client"] = Field(
+        default="default",
+        alias="GITHUB_ACCOUNT",
+    )
     github_personal_access_token: SecretStr = Field(
         default=SecretStr(""),
         alias="GITHUB_PERSONAL_ACCESS_TOKEN",
+    )
+    github_personal_access_token_client: SecretStr = Field(
+        default=SecretStr(""),
+        alias="GITHUB_PERSONAL_ACCESS_TOKEN_CLIENT",
     )
     github_mcp_transport: Literal["http", "stdio"] = Field(
         default="http",
@@ -118,6 +126,19 @@ class Settings(BaseSettings):
     gmail_app_password: SecretStr = Field(default=SecretStr(""), alias="GMAIL_APP_PASSWORD")
     gmail_smtp_host: str = Field(default="smtp.gmail.com", alias="GMAIL_SMTP_HOST")
     gmail_smtp_port: int = Field(default=587, alias="GMAIL_SMTP_PORT")
+
+    @model_validator(mode="after")
+    def resolve_github_token(self):
+        """Point github_personal_access_token at the selected account PAT."""
+        account = self.github_account.strip().lower()
+        if account == "client":
+            client_token = self.github_personal_access_token_client.get_secret_value().strip()
+            if not client_token:
+                raise ValueError(
+                    "GITHUB_ACCOUNT=client requires GITHUB_PERSONAL_ACCESS_TOKEN_CLIENT"
+                )
+            self.github_personal_access_token = self.github_personal_access_token_client
+        return self
 
     @property
     def gmail_app_password_normalized(self) -> str:

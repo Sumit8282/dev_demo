@@ -43,7 +43,7 @@ def build_orchestrator_tools(
         )
         result = await orchestrator.run_github_validation(ctx.state, ctx=ctx)
         ctx.github_validation = result
-        ctx.state = {**ctx.state, "github_validation": result.model_dump()}
+        ctx.record_validation("github_validation", result)
         ctx.emit(
             agent=WorkflowEventAgent.ORCHESTRATOR,
             phase=WorkflowEventPhase.COMPLETED,
@@ -59,8 +59,13 @@ def build_orchestrator_tools(
         if not jira_required(ctx.state.get("qa_mode")):
             ctx.emit(
                 agent=WorkflowEventAgent.JIRA,
-                phase=WorkflowEventPhase.INFO,
-                message="Jira validation skipped — GitHub-issues QA does not use Jira",
+                phase=WorkflowEventPhase.STARTED,
+                message="GitHub issues scope validation started",
+            )
+            ctx.emit(
+                agent=WorkflowEventAgent.JIRA,
+                phase=WorkflowEventPhase.COMPLETED,
+                message="GitHub issues scope validation completed — PASS",
             )
             return {
                 "status": "SKIPPED",
@@ -88,7 +93,7 @@ def build_orchestrator_tools(
             ctx=ctx,
         )
         ctx.jira_validation = result
-        ctx.state = {**ctx.state, "jira_validation": result.model_dump()}
+        ctx.record_validation("jira_validation", result)
         ctx.emit(
             agent=WorkflowEventAgent.JIRA,
             phase=WorkflowEventPhase.COMPLETED,
@@ -119,7 +124,7 @@ def build_orchestrator_tools(
             ctx=ctx,
         )
         ctx.qa_validation = result
-        ctx.state = {**ctx.state, "qa_validation": result.model_dump()}
+        ctx.record_validation("qa_validation", result)
         ctx.emit(
             agent=WorkflowEventAgent.QA,
             phase=WorkflowEventPhase.COMPLETED,

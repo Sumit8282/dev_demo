@@ -258,6 +258,7 @@ export default function ReleaseDetails() {
         environment={release.environment}
         jiraIssueKey={jiraIssueKey}
         events={release.workflowEvents}
+        qaMode={release.qaMode}
       />
 
       <section className="detail-section">

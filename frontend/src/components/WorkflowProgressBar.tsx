@@ -113,6 +113,12 @@ export default function WorkflowProgressBar({
       <div className="progress-bar-container">
         {WORKFLOW_STEPS.map((step, index) => {
           const { completed, current, failed, rejected } = stepStates[index];
+          const stepLabel =
+            step === 'Scope Agent'
+              ? skipJira
+                ? 'Scope Agent (GitHub)'
+                : 'Scope Agent (Jira)'
+              : step;
 
           return (
             <div key={step} className="progress-step-wrapper">
@@ -141,7 +147,7 @@ export default function WorkflowProgressBar({
                     <span>{index + 1}</span>
                   )}
                 </div>
-                <span className="step-label">{step}</span>
+                <span className="step-label">{stepLabel}</span>
               </div>
               {index < WORKFLOW_STEPS.length - 1 && (
                 <div className={`progress-connector ${completed ? 'completed' : ''}`} />

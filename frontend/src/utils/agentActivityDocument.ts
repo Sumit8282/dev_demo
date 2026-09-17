@@ -332,6 +332,17 @@ function mapEventToLines(event: WorkflowEvent, ctx: AgentActivityContext): Activ
     if (msg.includes('Adding build comment')) {
       return [];
     }
+    if (msg.includes('GitHub issues scope')) {
+      return [
+        {
+          id: `${id}-jira-start`,
+          type: 'phase',
+          sectionKey: 'jira',
+          phaseLabel: 'Started',
+          text: 'Running GitHub issues scope validation.',
+        },
+      ];
+    }
     if (msg.includes('Jira validation started') || msg.includes('validation started')) {
       return [
         {
@@ -447,6 +458,21 @@ function mapEventToLines(event: WorkflowEvent, ctx: AgentActivityContext): Activ
     }
   }
 
+  if (agent === 'jira' && phase === 'completed' && msg.includes('GitHub issues scope validation completed')) {
+    const passed = isPassed(event) || msg.includes('PASS');
+    return [
+      {
+        id: `${id}-jira-complete`,
+        type: 'phase',
+        sectionKey: 'jira',
+        phaseLabel: 'Completed',
+        text: passed
+          ? 'GitHub issues scope validation passed.'
+          : 'GitHub issues scope validation failed.',
+      },
+    ];
+  }
+
   if (agent === 'jira' && phase === 'completed' && msg.includes('Jira validation completed')) {
     const passed = isPassed(event) || msg.includes('PASS');
     const lines: ActivityLine[] = [];
@@ -493,6 +519,28 @@ function mapEventToLines(event: WorkflowEvent, ctx: AgentActivityContext): Activ
           sectionKey: 'qa',
           passed: isPassed(event),
           text: 'QA sign-off attachment verified',
+        },
+      ];
+    }
+    if (msg.includes('Linked GitHub issues')) {
+      return [
+        {
+          id,
+          type: 'check',
+          sectionKey: 'qa',
+          passed: isPassed(event),
+          text: msg.replace(/\s+—\s+(PASS|FAIL)$/i, ''),
+        },
+      ];
+    }
+    if (msg.includes('GitHub issue coverage')) {
+      return [
+        {
+          id,
+          type: 'check',
+          sectionKey: 'qa',
+          passed: isPassed(event),
+          text: 'GitHub issue evidence verified',
         },
       ];
     }
@@ -604,6 +652,22 @@ function mapEventToLines(event: WorkflowEvent, ctx: AgentActivityContext): Activ
     }
   }
 
+  if (
+    agent === 'l3' &&
+    (phase === 'info' || phase === 'completed') &&
+    msg.toLowerCase().includes('jira status update skipped')
+  ) {
+    return [
+      {
+        id,
+        type: 'phase',
+        sectionKey: 'l3',
+        phaseLabel: 'Completed',
+        text: 'GitHub issues tracker in use — Jira status update skipped.',
+      },
+    ];
+  }
+
   if (agent === 'l3' && phase === 'error' && isL3JiraStatusUpdateMessage(msg)) {
     const status = parseJiraTransitionStatus(msg);
     return [
@@ -671,6 +735,18 @@ function mapEventToLines(event: WorkflowEvent, ctx: AgentActivityContext): Activ
         },
       ];
     }
+  }
+
+  if (agent === 'merge' && phase === 'check' && msg.includes('GitHub issues evidence')) {
+    return [
+      {
+        id,
+        type: 'check',
+        sectionKey: 'merge',
+        passed: isPassed(event),
+        text: 'GitHub issues evidence is PASS',
+      },
+    ];
   }
 
   if (agent === 'merge' && phase === 'started') {

@@ -36,7 +36,8 @@ function normalizeStatus(status?: string | null): ValidationOutcome {
   return null;
 }
 
-function inferValidationFromEvents(events: WorkflowEvent[]): {
+/** Derive validation outcomes from the same completed events the agent feed renders. */
+export function inferValidationFromEvents(events: readonly { message: string }[]): {
   github: ValidationOutcome;
   jira: ValidationOutcome;
   qa: ValidationOutcome;
@@ -50,7 +51,10 @@ function inferValidationFromEvents(events: WorkflowEvent[]): {
     if (message.includes('GitHub PR validation completed')) {
       github = message.includes('PASS') ? 'PASS' : 'FAIL';
     }
-    if (message.includes('Jira validation completed')) {
+    if (
+      message.includes('Jira validation completed') ||
+      message.includes('GitHub issues scope validation completed')
+    ) {
       jira = message.includes('PASS') ? 'PASS' : 'FAIL';
     }
     if (message.includes('QA sign-off validation completed')) {

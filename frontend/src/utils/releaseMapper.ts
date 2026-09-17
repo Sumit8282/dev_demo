@@ -2,10 +2,11 @@ import type { BackendReleaseState } from '../api/releases';
 import { BACKEND_POST_MERGE_STATUSES } from '../api/releases';
 import type { QaCoverageRow, QaGapReviewUpdate, QaGeneratedTestRow, Release, StatusType, WorkflowActivity, WorkflowStep } from '../types/release';
 import type { WorkflowEvent } from '../types/workflowEvent';
-import { mapGithubIssuesFromState } from './githubIssueLinks';
+import { mapGithubIssuesFromState, isGithubIssuesQa } from './githubIssueLinks';
 import { buildFailureNextActions } from './buildFailureGuidance';
 import { formatDate, formatTime } from './helpers';
 import { formatJiraValidationRemarks } from './jiraValidationMessages';
+import { inferValidationFromEvents } from './workflowProgress';
 
 let activityCounter = 0;
 let workflowEventCounter = 0;
@@ -90,6 +91,14 @@ function formatGithubRemarks(
   if (validation.status === 'PASS') return 'GitHub PR validated';
   if (validation.status === 'FAIL') return validation.errors?.join('; ') || 'GitHub PR validation failed';
   return 'GitHub PR validation error';
+}
+
+function formatGithubIssuesScopeRemarks(state: BackendReleaseState): string {
+  const labels = mapGithubIssuesFromState(state).map((issue) => issue.label);
+  if (labels.length) {
+    return `GitHub issues ${labels.join(', ')}`;
+  }
+  return 'GitHub issues used for scope (no Jira ticket)';
 }
 
 function mergeFailureRemarks(state: BackendReleaseState): string {
@@ -305,10 +314,14 @@ function buildWorkflowActivities(state: BackendReleaseState, createdBy: string):
     remarks: 'PR Submitted',
   });
 
-  const githubStatus = state.github_validation?.status;
-  const jiraStatus = state.jira_validation?.status;
-  const qaStatus = state.qa_validation?.status;
+  // Validation results are only persisted when the orchestrator run finishes, so fall back to the
+  // completed events to keep this table in step with the agent activity feed.
+  const inferred = inferValidationFromEvents(state.workflow_events ?? []);
+  const githubStatus = state.github_validation?.status ?? inferred.github ?? undefined;
+  const jiraStatus = state.jira_validation?.status ?? inferred.jira ?? undefined;
+  const qaStatus = state.qa_validation?.status ?? inferred.qa ?? undefined;
   const isValidating = state.workflow_status === 'VALIDATING';
+  const skipJira = isGithubIssuesQa(state.qa_mode);
 
   activities.push({
     id: nextActivityId(),
@@ -334,18 +347,36 @@ function buildWorkflowActivities(state: BackendReleaseState, createdBy: string):
     name: 'Agent',
     soeId: '',
     team: AI_TEAM,
-    activity: 'Scope Agent',
-    status: jiraStatus
-      ? validationToStatus(jiraStatus)
-      : githubStatus && isValidating
-        ? 'Pending'
+    activity: skipJira ? 'Scope Agent (GitHub)' : 'Scope Agent (Jira)',
+    status: skipJira
+      ? githubStatus
+        ? validationToStatus(githubStatus)
         : isValidating
           ? 'Running'
-          : 'Pending',
-    time: jiraStatus ? formatBackendTime(state.updated_at) : '-',
-    remarks: jiraStatus
-      ? formatJiraValidationRemarks(state.jira_validation, state.jira_issue_key)
-      : '-',
+          : 'Pending'
+      : jiraStatus
+        ? validationToStatus(jiraStatus)
+        : githubStatus && isValidating
+          ? 'Pending'
+          : isValidating
+            ? 'Running'
+            : 'Pending',
+    time: skipJira
+      ? githubStatus
+        ? formatBackendTime(state.updated_at)
+        : '-'
+      : jiraStatus
+        ? formatBackendTime(state.updated_at)
+        : '-',
+    remarks: skipJira
+      ? githubStatus === 'PASS'
+        ? formatGithubIssuesScopeRemarks(state)
+        : githubStatus
+          ? formatGithubRemarks(state.github_validation)
+          : '-'
+      : jiraStatus
+        ? formatJiraValidationRemarks(state.jira_validation, state.jira_issue_key)
+        : '-',
   });
 
   activities.push({
@@ -357,12 +388,13 @@ function buildWorkflowActivities(state: BackendReleaseState, createdBy: string):
     activity: 'QA Validation',
     status: qaStatus
       ? validationToStatus(qaStatus)
-      : jiraStatus && isValidating
+      : (jiraStatus || (skipJira && githubStatus === 'PASS')) && isValidating
         ? 'Running'
         : 'Pending',
     time: qaStatus ? formatBackendTime(state.updated_at) : '-',
     remarks: qaStatus
-      ? state.qa_validation?.errors?.join('; ') || 'Validation complete'
+      ? state.qa_validation?.errors?.join('; ') ||
+        (skipJira ? 'QA Validation is completed' : 'Validation complete')
       : '-',
   });
 

@@ -15,7 +15,7 @@ from app.config import Settings, get_settings
 from app.mcp.client_base import MCPConnectionError, MCPToolNotFoundError
 from app.mcp.github_mcp import GitHubMCPClient
 from app.models.l3_approval import L3ApprovalStatus
-from app.models.release import WorkflowStatus
+from app.models.release import WorkflowStatus, jira_required
 from app.models.validation import (
     JiraValidationResult,
     MergeChecks,
@@ -148,12 +148,24 @@ class MergeAgent:
         jira_ok, jira_errors = self._validate_jira_pass(state)
         checks.jira_validation_pass = jira_ok
         if jira_ok:
+            github_issues_mode = not jira_required(state.get("qa_mode"))
             emit_workflow_event(
                 release_id,
                 agent=WorkflowEventAgent.MERGE,
                 phase=WorkflowEventPhase.CHECK,
-                message="Jira validation is PASS — PASS",
-                metadata={"check": "jira_validation_pass", "passed": True},
+                message=(
+                    "GitHub issues evidence is PASS — PASS"
+                    if github_issues_mode
+                    else "Jira validation is PASS — PASS"
+                ),
+                metadata={
+                    "check": (
+                        "github_issues_evidence"
+                        if github_issues_mode
+                        else "jira_validation_pass"
+                    ),
+                    "passed": True,
+                },
             )
         else:
             for error in jira_errors:
@@ -310,8 +322,6 @@ class MergeAgent:
         return True, []
 
     def _validate_jira_pass(self, state: ReleaseState) -> tuple[bool, list[str]]:
-        from app.models.release import jira_required
-
         if not jira_required(state.get("qa_mode")):
             return True, []
         raw = state.get("jira_validation")

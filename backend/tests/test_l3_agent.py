@@ -149,6 +149,31 @@ async def test_l3_agent_update_jira_ticket_status(l3_state):
 
 
 @pytest.mark.asyncio
+async def test_l3_agent_skips_jira_when_issue_key_missing(l3_state):
+    settings = MagicMock()
+    settings.jira_l3_approved_status = "Released"
+    jira_service = MagicMock()
+    jira_service.transition_to_status = AsyncMock(return_value=True)
+
+    agent = L3Agent(settings=settings)
+    with patch("app.agents.l3_agent.JiraWorkflowService", return_value=jira_service):
+        with patch("app.agents.l3_agent.emit_workflow_event") as emit_event:
+            result = await agent.update_jira_ticket_status(
+                issue_key="",
+                release_id=l3_state["release_id"],
+                low_risk=True,
+            )
+
+    assert result is True
+    jira_service.transition_to_status.assert_not_awaited()
+    emit_event.assert_called_once()
+    skip_call = emit_event.call_args.kwargs
+    assert skip_call["agent"].value == "l3"
+    assert skip_call["phase"].value == "info"
+    assert "Jira status update skipped" in skip_call["message"]
+
+
+@pytest.mark.asyncio
 async def test_l3_agent_low_risk_merged_notification_mail(l3_state):
     summary_service = MagicMock()
     summary_service.generate_summary = AsyncMock(return_value="Summary text.")

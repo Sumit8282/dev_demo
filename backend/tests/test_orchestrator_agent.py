@@ -318,3 +318,7 @@ async def test_skips_jira_when_qa_mode_is_github_issues(sample_state, medium_ris
     assert ctx.jira_validation is None
     assert ctx.qa_validation is not None
     assert ctx.l3_flow is not None
+    messages = [event["message"] for event in ctx.workflow_events]
+    assert "GitHub issues scope validation started" in messages
+    assert "GitHub issues scope validation completed — PASS" in messages
+    assert not any("Failed to transition Jira" in message for message in messages)

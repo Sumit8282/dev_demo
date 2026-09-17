@@ -19,7 +19,7 @@ from app.agents.rm_agent import RMAgent
 from app.agents.workflow_context import WorkflowRunContext
 from app.mcp.client_base import MCPConnectionError, MCPToolNotFoundError
 from app.mcp.github_mcp import GitHubMCPClient, INVALID_PR_URL_MESSAGE, is_invalid_pr_read_error
-from app.models.release import OverallValidationStatus, WorkflowStatus
+from app.models.release import OverallValidationStatus, WorkflowStatus, jira_required
 from app.models.validation import (
     GitHubChecks,
     GitHubValidationResult,
@@ -573,11 +573,13 @@ class Orchestrator:
                 },
             )
 
-        await self.l3_agent.update_jira_ticket_status(
-            issue_key=state["jira_issue_key"],
-            release_id=state["release_id"],
-            low_risk=True,
-        )
+        issue_key = (state.get("jira_issue_key") or "").strip()
+        if jira_required(state.get("qa_mode")) and issue_key:
+            await self.l3_agent.update_jira_ticket_status(
+                issue_key=issue_key,
+                release_id=state["release_id"],
+                low_risk=True,
+            )
 
         merge_state: ReleaseState = {
             **state,
@@ -782,6 +784,19 @@ class Orchestrator:
                         f"{'PASS' if checks.signoff_completed else 'FAIL'}"
                     )
                 elif qa_mode == "github_issues":
+                    issue_refs = _format_github_issue_refs(result.metadata or {})
+                    ctx.emit(
+                        agent=WorkflowEventAgent.QA,
+                        phase=WorkflowEventPhase.CHECK,
+                        message=(
+                            f"Linked GitHub issues {issue_refs} — "
+                            f"{'PASS' if checks.signoff_completed else 'FAIL'}"
+                        ),
+                        metadata={
+                            "check": "github_issues_linked",
+                            "passed": checks.signoff_completed,
+                        },
+                    )
                     check_message = (
                         f"Lane 1 GitHub issue coverage (sha={(result.metadata or {}).get('head_sha') or 'unknown'}) — "
                         f"{'PASS' if checks.signoff_completed else 'FAIL'}"
@@ -974,6 +989,12 @@ class Orchestrator:
         if status == ValidationStatus.ERROR:
             return "ERROR"
         return "FAIL"
+
+
+def _format_github_issue_refs(metadata: dict) -> str:
+    numbers = metadata.get("github_issue_numbers") or []
+    refs = [f"#{item}" for item in numbers if str(item).strip()]
+    return ", ".join(refs) if refs else "(none linked)"
 
 
 def _metadata_str(metadata: dict | None, key: str) -> str | None:

@@ -9,7 +9,7 @@ import { formatTime } from '../utils/helpers';
 const AGENT_LABELS: Record<string, string> = {
   system: 'System',
   orchestrator: 'Orchestrator',
-  jira: 'Scope Agent',
+  jira: 'Scope Agent (Jira)',
   qa: 'QA Agent',
   l3: 'L3 Agent',
   merge: 'Merge agent',
@@ -36,8 +36,12 @@ function formatEventTime(timestamp: string): string {
   }
 }
 
-function agentLabel(agent: string): string {
+function agentLabel(agent: string, qaMode?: string): string {
   if (agent === 'github') return 'Orchestrator';
+  if (agent === 'jira' && qaMode === 'github_issues') {
+    return 'Scope Agent (GitHub)';
+  }
+  if (agent === 'merge') return 'Merge Agent';
   return AGENT_LABELS[agent] ?? agent;
 }
 
@@ -95,6 +99,7 @@ interface AgentActivityFeedProps {
   environment: string;
   jiraIssueKey: string;
   events: WorkflowEvent[];
+  qaMode?: string;
   scrollContainerRef?: RefObject<HTMLDivElement | null>;
 }
 
@@ -103,6 +108,7 @@ export default function AgentActivityFeed({
   environment,
   jiraIssueKey,
   events,
+  qaMode = '',
   scrollContainerRef,
 }: AgentActivityFeedProps) {
   const logContext: AgentActivityContext = useMemo(
@@ -140,7 +146,7 @@ export default function AgentActivityFeed({
       {visibleEvents.map((event) => (
         <div key={event.id} className="agent-activity-row agent-activity-row--revealed">
           <span className="agent-activity-time">{formatEventTime(event.timestamp)}</span>
-          <span className="agent-activity-agent">{agentLabel(String(event.agent))}</span>
+          <span className="agent-activity-agent">{agentLabel(String(event.agent), qaMode)}</span>
           <span className={`agent-activity-phase ${phaseClass(String(event.phase))}`}>
             {PHASE_LABELS[String(event.phase)] ?? event.phase}
           </span>

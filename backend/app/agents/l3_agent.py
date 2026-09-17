@@ -381,6 +381,20 @@ class L3Agent:
         low_risk: bool = False,
     ) -> bool:
         """Transition the Jira ticket to the L3-approved status via Jira MCP tools."""
+        if not (issue_key or "").strip():
+            logger.info(
+                "[L3_AGENT] No Jira ticket for release %s — skipping status update",
+                release_id,
+            )
+            emit_workflow_event(
+                release_id,
+                agent=WorkflowEventAgent.L3,
+                phase=WorkflowEventPhase.INFO,
+                message="GitHub issues tracker in use — Jira status update skipped",
+                metadata={"low_risk_auto_approval": low_risk, "skipped": True},
+            )
+            return True
+
         target_status = self.settings.jira_l3_approved_status
         metadata = {
             "low_risk_auto_approval": low_risk,

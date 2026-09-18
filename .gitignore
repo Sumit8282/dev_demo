@@ -9,3 +9,4 @@ __pycache__/
 frontend/dist/
 backend/db/*.db
 *.db
+barko_agent/

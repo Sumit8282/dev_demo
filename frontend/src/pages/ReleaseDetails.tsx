@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { getQaSignoffAttachmentUrl } from '../api/releases';
 import { BACKEND_POST_MERGE_STATUSES } from '../api/releases';
 import AgentActivityPanel from '../components/AgentActivityPanel';
+import GitHubIssuesCell from '../components/GitHubIssuesCell';
 import QaCoverageTable from '../components/QaCoverageTable';
 import QaGeneratedTestsTable from '../components/QaGeneratedTestsTable';
 import StatusBadge from '../components/StatusBadge';
@@ -10,6 +11,7 @@ import WorkflowProgressBar from '../components/WorkflowProgressBar';
 import { useReleases } from '../context/ReleaseContext';
 import { useReleasePolling } from '../hooks/useReleasePolling';
 import { extractJiraIssueKey } from '../utils/agentActivityDocument';
+import { isGithubIssuesQa } from '../utils/githubIssueLinks';
 
 export default function ReleaseDetails() {
   const { id } = useParams<{ id: string }>();
@@ -98,6 +100,7 @@ export default function ReleaseDetails() {
   }
 
   const jiraIssueKey = extractJiraIssueKey(release.jira);
+  const usesGithubIssues = isGithubIssuesQa(release.qaMode);
 
   return (
     <div className="page">
@@ -115,6 +118,37 @@ export default function ReleaseDetails() {
         </Link>
       </div>
 
+      {release.backendWorkflowStatus === 'BUILD_FAILED' && (
+        <section className="detail-section build-failure-banner" role="alert">
+          <h3 className="section-title">Build failed</h3>
+          <p>
+            <strong>What failed:</strong>{' '}
+            {release.buildFailureReason || 'CI/CD pipeline failed'}
+          </p>
+          {release.buildJobUrl && (
+            <p>
+              <strong>CI run:</strong>{' '}
+              <a
+                href={release.buildJobUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="link-muted"
+              >
+                {release.buildJobUrl}
+              </a>
+            </p>
+          )}
+          <p>
+            <strong>Next actions:</strong>
+          </p>
+          <ol className="build-failure-next-actions">
+            {(release.buildNextActions ?? []).map((step) => (
+              <li key={step}>{step}</li>
+            ))}
+          </ol>
+        </section>
+      )}
+
       <section className="detail-section">
         <h3 className="section-title">Release Information</h3>
         <div className="table-container">
@@ -131,11 +165,17 @@ export default function ReleaseDetails() {
                 </td>
               </tr>
               <tr>
-                <th>JIRA</th>
+                <th>{usesGithubIssues ? 'GitHub Issues' : 'JIRA'}</th>
                 <td>
-                  <a href={release.jira} target="_blank" rel="noopener noreferrer" className="link-muted">
-                    {release.jira}
-                  </a>
+                  {usesGithubIssues ? (
+                    <GitHubIssuesCell issues={release.githubIssues} />
+                  ) : release.jira ? (
+                    <a href={release.jira} target="_blank" rel="noopener noreferrer" className="link-muted">
+                      {release.jira}
+                    </a>
+                  ) : (
+                    '-'
+                  )}
                 </td>
                 <th>QA validation</th>
                 <td>{release.qaSignOff || '-'}</td>
@@ -195,6 +235,7 @@ export default function ReleaseDetails() {
         jiraValidationStatus={release.jiraValidationStatus}
         qaValidationStatus={release.qaValidationStatus}
         workflowEvents={release.workflowEvents}
+        qaMode={release.qaMode}
       />
 
       <QaCoverageTable
@@ -202,6 +243,8 @@ export default function ReleaseDetails() {
         qaStatus={release.qaValidationStatus}
         coveragePercent={release.qaCoveragePercent}
         errors={release.qaValidationErrors}
+        gapReviewUpdates={release.qaGapReviewUpdates}
+        gapReviewNotes={release.qaGapReviewNotes}
       />
 
       <QaGeneratedTestsTable
@@ -215,6 +258,7 @@ export default function ReleaseDetails() {
         environment={release.environment}
         jiraIssueKey={jiraIssueKey}
         events={release.workflowEvents}
+        qaMode={release.qaMode}
       />
 
       <section className="detail-section">

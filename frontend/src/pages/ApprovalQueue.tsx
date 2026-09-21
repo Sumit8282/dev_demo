@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+import GitHubIssuesCell from '../components/GitHubIssuesCell';
 import SearchBox from '../components/SearchBox';
 import type { ApprovalType, Release } from '../types/release';
 import { useReleases } from '../context/ReleaseContext';
+import { isGithubIssuesQa } from '../utils/githubIssueLinks';
 
 function getL3ApproverName(release: Release): string {
   return (
@@ -23,6 +25,12 @@ function filterReleases(releases: Release[], query: string) {
       r.id.toLowerCase().includes(q) ||
       r.pr.toLowerCase().includes(q) ||
       r.jira.toLowerCase().includes(q) ||
+      (r.githubIssues ?? []).some(
+        (issue) =>
+          issue.label.toLowerCase().includes(q) ||
+          issue.title.toLowerCase().includes(q) ||
+          String(issue.number).includes(q)
+      ) ||
       r.createdBy.toLowerCase().includes(q) ||
       getL3ApproverName(r).toLowerCase().includes(q) ||
       r.status.toLowerCase().includes(q)
@@ -59,7 +67,7 @@ function ApprovalTable({
           <tr>
             <th>Release ID</th>
             <th>PR</th>
-            <th>JIRA</th>
+            <th>Jira / Issues</th>
             <th>Developer</th>
             <th>L3 Approver</th>
             <th>Environment</th>
@@ -96,15 +104,21 @@ function ApprovalTable({
                   </a>
                 </td>
                 <td className="cell-truncate">
-                  <a
-                    href={release.jira}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="link-muted cell-truncate-text"
-                    title={release.jira}
-                  >
-                    {release.jira}
-                  </a>
+                  {isGithubIssuesQa(release.qaMode) ? (
+                    <GitHubIssuesCell issues={release.githubIssues} />
+                  ) : release.jira ? (
+                    <a
+                      href={release.jira}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="link-muted cell-truncate-text"
+                      title={release.jira}
+                    >
+                      {release.jira}
+                    </a>
+                  ) : (
+                    '-'
+                  )}
                 </td>
                 <td>{release.createdBy}</td>
                 <td>{getL3ApproverName(release)}</td>

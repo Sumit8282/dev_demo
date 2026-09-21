@@ -4,7 +4,7 @@ import type { WorkflowStep } from '../types/release';
 
 export const WORKFLOW_STEPS: WorkflowStep[] = [
   'PR Raised',
-  'Jira Validation',
+  'Scope Agent',
   'QA Validation',
   'L3 Approval',
   'Waiting for Merge',
@@ -36,7 +36,8 @@ function normalizeStatus(status?: string | null): ValidationOutcome {
   return null;
 }
 
-function inferValidationFromEvents(events: WorkflowEvent[]): {
+/** Derive validation outcomes from the same completed events the agent feed renders. */
+export function inferValidationFromEvents(events: readonly { message: string }[]): {
   github: ValidationOutcome;
   jira: ValidationOutcome;
   qa: ValidationOutcome;
@@ -50,7 +51,10 @@ function inferValidationFromEvents(events: WorkflowEvent[]): {
     if (message.includes('GitHub PR validation completed')) {
       github = message.includes('PASS') ? 'PASS' : 'FAIL';
     }
-    if (message.includes('Jira validation completed')) {
+    if (
+      message.includes('Jira validation completed') ||
+      message.includes('GitHub issues scope validation completed')
+    ) {
       jira = message.includes('PASS') ? 'PASS' : 'FAIL';
     }
     if (message.includes('QA sign-off validation completed')) {
@@ -72,14 +76,17 @@ export function computeValidationProgress(
   githubStatus?: string | null,
   jiraStatus?: string | null,
   qaStatus?: string | null,
-  workflowEvents: WorkflowEvent[] = []
+  workflowEvents: WorkflowEvent[] = [],
+  skipJira = false
 ): ValidationProgress {
   const inferred = inferValidationFromEvents(workflowEvents);
   const github = mergeValidationStatus(
     normalizeStatus(githubStatus),
     inferred.github
   );
-  const jira = mergeValidationStatus(normalizeStatus(jiraStatus), inferred.jira);
+  const jira = skipJira && github === 'PASS'
+    ? 'PASS'
+    : mergeValidationStatus(normalizeStatus(jiraStatus), inferred.jira);
   const qa = mergeValidationStatus(normalizeStatus(qaStatus), inferred.qa);
 
   if (github === null) {
@@ -131,6 +138,7 @@ export function getWorkflowStepStates(options: {
   qaStatus?: string | null;
   workflowEvents?: WorkflowEvent[];
   visibleValidationCompleted: number;
+  skipJira?: boolean;
 }): StepVisualState[] {
   const {
     currentStage,
@@ -140,13 +148,15 @@ export function getWorkflowStepStates(options: {
     qaStatus,
     workflowEvents = [],
     visibleValidationCompleted,
+    skipJira = false,
   } = options;
 
   const validation = computeValidationProgress(
     githubStatus,
     jiraStatus,
     qaStatus,
-    workflowEvents
+    workflowEvents,
+    skipJira
   );
   const postIndex = getPostValidationStepIndex(currentStage, status);
   const isRejected = status === 'Rejected';

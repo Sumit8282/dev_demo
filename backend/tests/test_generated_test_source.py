@@ -62,3 +62,36 @@ async def test_built_script_passes_when_ac_phrase_exists(tmp_path: Path):
         checkout_dir=tmp_path,
     )
     assert results[0].status == "PASS"
+
+
+@pytest.mark.asyncio
+async def test_assert_mentioned_reads_xml_and_properties(tmp_path: Path):
+    (tmp_path / "src" / "main" / "resources").mkdir(parents=True)
+    (tmp_path / "pom.xml").write_text(
+        "<project><artifactId>x-m-s</artifactId></project>\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "src" / "main" / "resources" / "application.properties").write_text(
+        "spring.application.name=x-m-s\n",
+        encoding="utf-8",
+    )
+    runner = GeneratedTestRunner(settings=_settings())
+    results = await runner.run(
+        [
+            QAGeneratedTest(
+                ac_id="AC-06",
+                generated_test="test_ac_06",
+                test_file="tests/generated/ac-06_test.py",
+                test_code=(
+                    "from tests.generated._qa_source import assert_mentioned\n\n"
+                    "def test_ac_06():\n"
+                    "    assert_mentioned('x-m-s')\n"
+                ),
+            )
+        ],
+        owner="acme",
+        repo="x-m-s",
+        sha="abc1234",
+        checkout_dir=tmp_path,
+    )
+    assert results[0].status == "PASS"

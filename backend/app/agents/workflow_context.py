@@ -11,6 +11,7 @@ from app.models.validation import (
     QAValidationResult,
 )
 from app.models.workflow_event import WorkflowEventAgent, WorkflowEventPhase
+from app.services.release_store import release_store
 from app.services.workflow_events import make_workflow_event, persist_workflow_event
 from app.workflow.state import ReleaseState
 
@@ -31,6 +32,20 @@ class WorkflowRunContext:
     @property
     def release_id(self) -> str:
         return self.state["release_id"]
+
+    def record_validation(
+        self,
+        key: str,
+        result: GitHubValidationResult | JiraValidationResult | QAValidationResult,
+    ) -> None:
+        """Store a validation result on the run state and persist it immediately.
+
+        Persisting per step keeps the release row in step with the workflow events,
+        so the UI shows remarks as soon as a validation completes.
+        """
+        payload = result.model_dump()
+        self.state = {**self.state, key: payload}
+        release_store.update(self.release_id, {key: payload})
 
     def emit(
         self,

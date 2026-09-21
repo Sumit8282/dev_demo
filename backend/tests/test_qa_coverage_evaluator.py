@@ -188,6 +188,137 @@ def test_apply_coverage_constraints_rejects_fully_covered_without_mapped_test():
     assert result.coverage_matrix[0].coverage == "Not Covered"
 
 
+def test_select_gap_review_rows_skips_covered_but_failed():
+    from app.services.qa_coverage_evaluator import select_gap_review_rows
+
+    rows = [
+        QACoverageMatrixRow(
+            ac_id="AC-01",
+            acceptance_criterion="Remove Offerings",
+            coverage="Covered but Failed",
+            test_result="Failed",
+        ),
+        QACoverageMatrixRow(
+            ac_id="AC-02",
+            acceptance_criterion="Keep layout",
+            coverage="Not Covered",
+            evidence_reason="Mapper omitted this criterion.",
+        ),
+        QACoverageMatrixRow(
+            ac_id="AC-03",
+            acceptance_criterion="Timeout retry",
+            coverage="Unable to Determine",
+        ),
+    ]
+    gaps = select_gap_review_rows(rows)
+    assert [row.ac_id for row in gaps] == ["AC-02", "AC-03"]
+
+
+def test_overlay_and_audit_gap_review_rows():
+    from app.services.qa_coverage_evaluator import (
+        gap_review_audit,
+        overlay_gap_review_rows,
+        tag_gap_review_evidence,
+    )
+
+    before = [
+        QACoverageMatrixRow(
+            ac_id="AC-01",
+            acceptance_criterion="Remove Offerings",
+            test_cases="TC-001",
+            coverage="Fully Covered",
+            test_result="Pass",
+            evidence_reason="Mapped to TC-001",
+        ),
+        QACoverageMatrixRow(
+            ac_id="AC-02",
+            acceptance_criterion="Keep layout",
+            coverage="Not Covered",
+            evidence_reason="Mapper omitted this criterion.",
+        ),
+    ]
+    overlaid = overlay_gap_review_rows(
+        before,
+        [
+            QACoverageMatrixRow(
+                ac_id="AC-02",
+                acceptance_criterion="ignored extra text",
+                test_cases="TC-002",
+                coverage="Fully Covered",
+                test_result="Pass",
+                evidence_reason="TC-002 checks layout",
+            ),
+            QACoverageMatrixRow(
+                ac_id="AC-99",
+                acceptance_criterion="invented",
+                coverage="Fully Covered",
+                test_cases="TC-001",
+                test_result="Pass",
+            ),
+        ],
+    )
+    assert [row.ac_id for row in overlaid] == ["AC-01", "AC-02"]
+    assert overlaid[1].acceptance_criterion == "Keep layout"
+    assert overlaid[1].test_cases == "TC-002"
+    updates = gap_review_audit(before, overlaid)
+    assert updates[0]["changed"] is False
+    assert updates[1]["changed"] is True
+    assert updates[1]["before_coverage"] == "Not Covered"
+    assert updates[1]["after_coverage"] == "Fully Covered"
+    tag_gap_review_evidence(overlaid, {"AC-02"})
+    assert overlaid[1].evidence_reason.startswith("[gap-review]")
+    assert not overlaid[0].evidence_reason.startswith("[gap-review]")
+
+
+def test_apply_coverage_constraints_upgrades_partial_when_mapped_tests_pass():
+    result = apply_coverage_constraints(
+        QALLMValidationOutput(
+            status=ValidationStatus.FAIL,
+            coverage_matrix=[
+                QACoverageMatrixRow(
+                    ac_id="AC-02",
+                    acceptance_criterion="Clicking MCP Factory navigates to correct Demo URL.",
+                    test_cases="TC-002; TC-003",
+                    coverage="Partially Covered",
+                    test_result="Pass",
+                ),
+                QACoverageMatrixRow(
+                    ac_id="AC-03",
+                    acceptance_criterion="Clicking Competitor Intelligence navigates to correct Demo URL.",
+                    test_cases="TC-002; TC-003",
+                    coverage="Partially Covered",
+                    test_result="Pass",
+                ),
+            ],
+            errors=["One or more acceptance criteria are not fully covered: AC-02, AC-03."],
+        ),
+        acceptance_criteria=_criteria(
+            "All offering cards are clickable.",
+            "Clicking MCP Factory navigates to correct Demo URL.",
+            "Clicking Competitor Intelligence navigates to correct Demo URL.",
+        )[1:],
+        test_cases=[
+            QATestCase(
+                test_case_id="TC-002",
+                scenario="Verified each card opens the correct Demo URL.",
+                status="Pass",
+            ),
+            QATestCase(
+                test_case_id="TC-003",
+                scenario="Verified Demo URLs open successfully in a new tab.",
+                status="Pass",
+            ),
+        ],
+    )
+    assert result.status == ValidationStatus.PASS
+    assert [row.coverage for row in result.coverage_matrix] == [
+        "Fully Covered",
+        "Fully Covered",
+    ]
+    assert result.errors == []
+    assert result.acceptance_criteria_coverage_percent == 100.0
+
+
 def test_apply_coverage_constraints_empty_acs():
     result = apply_coverage_constraints(
         QALLMValidationOutput(status=ValidationStatus.PASS),

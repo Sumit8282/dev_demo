@@ -19,7 +19,7 @@ from app.agents.rm_agent import RMAgent
 from app.agents.workflow_context import WorkflowRunContext
 from app.mcp.client_base import MCPConnectionError, MCPToolNotFoundError
 from app.mcp.github_mcp import GitHubMCPClient, INVALID_PR_URL_MESSAGE, is_invalid_pr_read_error
-from app.models.release import OverallValidationStatus, WorkflowStatus
+from app.models.release import OverallValidationStatus, WorkflowStatus, jira_required
 from app.models.validation import (
     GitHubChecks,
     GitHubValidationResult,
@@ -573,11 +573,13 @@ class Orchestrator:
                 },
             )
 
-        await self.l3_agent.update_jira_ticket_status(
-            issue_key=state["jira_issue_key"],
-            release_id=state["release_id"],
-            low_risk=True,
-        )
+        issue_key = (state.get("jira_issue_key") or "").strip()
+        if jira_required(state.get("qa_mode")) and issue_key:
+            await self.l3_agent.update_jira_ticket_status(
+                issue_key=issue_key,
+                release_id=state["release_id"],
+                low_risk=True,
+            )
 
         merge_state: ReleaseState = {
             **state,
@@ -781,6 +783,24 @@ class Orchestrator:
                         f"Lane 1 PR test coverage (sha={(result.metadata or {}).get('head_sha') or 'unknown'}) — "
                         f"{'PASS' if checks.signoff_completed else 'FAIL'}"
                     )
+                elif qa_mode == "github_issues":
+                    issue_refs = _format_github_issue_refs(result.metadata or {})
+                    ctx.emit(
+                        agent=WorkflowEventAgent.QA,
+                        phase=WorkflowEventPhase.CHECK,
+                        message=(
+                            f"Linked GitHub issues {issue_refs} — "
+                            f"{'PASS' if checks.signoff_completed else 'FAIL'}"
+                        ),
+                        metadata={
+                            "check": "github_issues_linked",
+                            "passed": checks.signoff_completed,
+                        },
+                    )
+                    check_message = (
+                        f"Lane 1 GitHub issue coverage (sha={(result.metadata or {}).get('head_sha') or 'unknown'}) — "
+                        f"{'PASS' if checks.signoff_completed else 'FAIL'}"
+                    )
                 else:
                     check_message = (
                         f"QA sign-off attachment validated — "
@@ -818,7 +838,7 @@ class Orchestrator:
     def evaluate_validation(
         self,
         github_result: GitHubValidationResult,
-        jira_result: JiraValidationResult,
+        jira_result: JiraValidationResult | None,
         qa_result: QAValidationResult,
     ) -> tuple[OverallValidationStatus, list[str]]:
         failure_reasons: list[str] = []
@@ -830,10 +850,13 @@ class Orchestrator:
         elif github_result.status == ValidationStatus.FAIL:
             failure_reasons.extend(github_result.errors)
 
-        if jira_result.status == ValidationStatus.ERROR:
-            failure_reasons.extend(jira_result.errors or ["Jira validation could not be completed."])
-        elif jira_result.status == ValidationStatus.FAIL:
-            failure_reasons.extend(jira_result.errors)
+        if jira_result is not None:
+            if jira_result.status == ValidationStatus.ERROR:
+                failure_reasons.extend(
+                    jira_result.errors or ["Jira validation could not be completed."]
+                )
+            elif jira_result.status == ValidationStatus.FAIL:
+                failure_reasons.extend(jira_result.errors)
 
         if qa_result.status == ValidationStatus.ERROR:
             failure_reasons.extend(qa_result.errors or ["QA validation could not be completed."])
@@ -842,15 +865,16 @@ class Orchestrator:
 
         if (
             github_result.status == ValidationStatus.ERROR
-            or jira_result.status == ValidationStatus.ERROR
+            or (jira_result is not None and jira_result.status == ValidationStatus.ERROR)
             or qa_result.status == ValidationStatus.ERROR
         ):
             logger.info("[ORCHESTRATOR] Overall validation: ERROR")
             return OverallValidationStatus.ERROR, failure_reasons
 
+        jira_ok = jira_result is None or jira_result.status == ValidationStatus.PASS
         if (
             github_result.status == ValidationStatus.PASS
-            and jira_result.status == ValidationStatus.PASS
+            and jira_ok
             and qa_result.status == ValidationStatus.PASS
         ):
             logger.info("[ORCHESTRATOR] Overall validation: PASS")
@@ -873,12 +897,16 @@ class Orchestrator:
         self,
         state: ReleaseState,
         github_result: GitHubValidationResult,
-        jira_result: JiraValidationResult,
+        jira_result: JiraValidationResult | None,
         qa_result: QAValidationResult,
         failure_reasons: list[str],
     ) -> str:
         github_label = self._validation_label(github_result.status)
-        jira_label = self._validation_label(jira_result.status)
+        jira_label = (
+            "SKIPPED"
+            if jira_result is None
+            else self._validation_label(jira_result.status)
+        )
         qa_label = self._validation_label(qa_result.status)
 
         failed_checks = "\n".join(f"* {reason}" for reason in failure_reasons) or "* Unknown failure"
@@ -886,7 +914,7 @@ class Orchestrator:
         target_branch = github_result.metadata.get("target_branch", "unknown")
         raised_by = github_result.metadata.get("raised_by", "unknown")
         pr_number = github_result.metadata.get("pull_number", state["github_pr_number"])
-        return (
+        body = (
             "Release Validation Failed\n\n"
             f"Release Branch: {state['release_branch']}\n"
             f"Environment: {state['environment']}\n"
@@ -961,6 +989,12 @@ class Orchestrator:
         if status == ValidationStatus.ERROR:
             return "ERROR"
         return "FAIL"
+
+
+def _format_github_issue_refs(metadata: dict) -> str:
+    numbers = metadata.get("github_issue_numbers") or []
+    refs = [f"#{item}" for item in numbers if str(item).strip()]
+    return ", ".join(refs) if refs else "(none linked)"
 
 
 def _metadata_str(metadata: dict | None, key: str) -> str | None:

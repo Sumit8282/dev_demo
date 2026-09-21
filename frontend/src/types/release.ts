@@ -9,7 +9,7 @@ export type ApprovalType = 'L3' | 'RM';
 
 export type WorkflowStep =
   | 'PR Raised'
-  | 'Jira Validation'
+  | 'Scope Agent'
   | 'QA Validation'
   | 'L3 Approval'
   | 'L3 Approval Pending'
@@ -41,6 +41,15 @@ export interface QaCoverageRow {
   reason: string;
 }
 
+export interface QaGapReviewUpdate {
+  acId: string;
+  changed: boolean;
+  beforeCoverage: string;
+  afterCoverage: string;
+  beforeTestCases: string;
+  afterTestCases: string;
+}
+
 export interface QaGeneratedTestRow {
   acId: string;
   generatedTest: string;
@@ -50,11 +59,21 @@ export interface QaGeneratedTestRow {
   status: 'PASS' | 'FAIL';
 }
 
+export interface GitHubIssueLink {
+  owner: string;
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+  label: string;
+}
+
 export interface Release {
   id: string;
   releaseBranch: string;
   pr: string;
   jira: string;
+  githubIssues: GitHubIssueLink[];
   qaSignOff: string;
   qaReason: string;
   qaSignOffAttachmentName: string;
@@ -66,6 +85,9 @@ export interface Release {
   createdBy: string;
   createdDate: string;
   buildId: string;
+  buildFailureReason?: string;
+  buildJobUrl?: string;
+  buildNextActions?: string[];
   deploymentStatus: string;
   workflowActivities: WorkflowActivity[];
   workflowEvents: WorkflowEvent[];
@@ -77,6 +99,8 @@ export interface Release {
   qaValidationErrors?: string[];
   qaCoverageRows?: QaCoverageRow[];
   qaCoveragePercent?: number | null;
+  qaGapReviewUpdates?: QaGapReviewUpdate[];
+  qaGapReviewNotes?: string;
   qaGeneratedTests?: QaGeneratedTestRow[];
   qaGeneratedTestsRepo?: string;
   qaGeneratedTestsSha?: string;
@@ -93,7 +117,7 @@ export interface NewReleaseForm {
   releaseDate: string;
 }
 
-export type QaValidationChoice = 'No' | 'Upload' | 'PrTests';
+export type QaValidationChoice = 'No' | 'Upload' | 'PrTests' | 'GhIssues';
 
 export const QA_SIGNOFF_ALLOWED_EXTENSIONS = [
   '.docx',

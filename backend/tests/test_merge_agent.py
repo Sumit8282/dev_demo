@@ -135,6 +135,17 @@ async def test_merge_agent_fails_when_jira_not_pass(sample_state):
     assert any("Jira validation" in error for error in result.errors)
 
 
+def test_merge_agent_skips_jira_when_github_issues_qa(sample_state):
+    state = _approved_state(sample_state)
+    state["qa_mode"] = "github_issues"
+    state["jira_validation"] = None
+    state["jira_url"] = ""
+    state["jira_issue_key"] = ""
+
+    agent = MergeAgent(github_client=_build_github_client())
+    assert agent._validate_jira_pass(state) == (True, [])
+
+
 @pytest.mark.asyncio
 async def test_merge_agent_fails_when_pr_closed(sample_state):
     client = _build_github_client(

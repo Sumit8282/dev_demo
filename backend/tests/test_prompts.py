@@ -33,6 +33,14 @@ def test_load_qa_agent_prompts():
     assert "intent, not keyword" in system.lower() or "not keyword" in system.lower()
 
 
+def test_load_qa_gap_review_prompts():
+    system = load_prompt("qa_gap_review_system")
+    user = load_prompt("qa_gap_review_user")
+    assert "one-shot" in system.lower() or "single" in system.lower()
+    assert "{gap_rows}" in user
+    assert "{test_cases}" in user
+
+
 def test_load_qa_hybrid_extract_prompts():
     ac_system = load_prompt("qa_ac_extract_system")
     ac_user = load_prompt("qa_ac_extract_user")

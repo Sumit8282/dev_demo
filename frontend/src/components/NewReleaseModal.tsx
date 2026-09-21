@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import type { NewReleaseForm } from '../types/release';
+import type { NewReleaseForm, QaValidationChoice } from '../types/release';
 import { QA_SIGNOFF_ALLOWED_EXTENSIONS } from '../types/release';
 
 interface NewReleaseModalProps {
@@ -83,9 +83,10 @@ export default function NewReleaseModal({
     setAttachmentError(null);
     setForm((prev) => ({
       ...prev,
-      qaSignOff: value,
+      qaSignOff: value as QaValidationChoice,
       qaReason: value === 'No' ? prev.qaReason : '',
       qaSignOffAttachment: value === 'Upload' ? prev.qaSignOffAttachment : null,
+      jira: value === 'GhIssues' ? '' : prev.jira,
     }));
   };
 
@@ -152,17 +153,27 @@ export default function NewReleaseModal({
                 required
               />
             </div>
-            <div className="form-group">
-              <label htmlFor="jira">JIRA</label>
-              <input
-                id="jira"
-                type="text"
-                value={form.jira}
-                onChange={(e) => updateField('jira', e.target.value)}
-                placeholder="Jira URL"
-                required
-              />
-            </div>
+            {form.qaSignOff === 'GhIssues' ? (
+              <div className="form-group">
+                <span className="form-label">GitHub Issues</span>
+                <p className="field-hint">
+                  Linked from the PR. Add <code>Fixes #12</code> or a full issue URL in the PR
+                  title, description, or comments. Unlinked issues are ignored.
+                </p>
+              </div>
+            ) : (
+              <div className="form-group">
+                <label htmlFor="jira">JIRA</label>
+                <input
+                  id="jira"
+                  type="text"
+                  value={form.jira}
+                  onChange={(e) => updateField('jira', e.target.value)}
+                  placeholder="Jira URL"
+                  required
+                />
+              </div>
+            )}
             <div className="form-group">
               <span className="form-label">QA validation</span>
               <div className="radio-group radio-group-stacked" role="radiogroup" aria-label="QA validation">
@@ -185,6 +196,16 @@ export default function NewReleaseModal({
                     onChange={(e) => handleQaSignOffChange(e.target.value)}
                   />
                   <span>Use live Jira + GitHub evidence (no document)</span>
+                </label>
+                <label className="radio-option">
+                  <input
+                    type="radio"
+                    name="qaSignOff"
+                    value="GhIssues"
+                    checked={form.qaSignOff === 'GhIssues'}
+                    onChange={(e) => handleQaSignOffChange(e.target.value)}
+                  />
+                  <span>Use live GitHub issues + GitHub evidence (no document)</span>
                 </label>
                 <label className="radio-option">
                   <input
@@ -228,6 +249,16 @@ export default function NewReleaseModal({
                   the PR Testing / verification write-up, and GitHub check status. If every
                   AC is covered, QA passes. If not, Lane 2 drafts tests for a developer to
                   review, commit, then create a new release.
+                </p>
+              </div>
+            )}
+            {form.qaSignOff === 'GhIssues' && (
+              <div className="form-group">
+                <p className="field-hint">
+                  No QA document needed. The agent reads GitHub issues linked from this PR
+                  (Fixes #12, issue URLs) and maps those acceptance criteria to PR tests,
+                  related repo tests, the PR Testing write-up, and GitHub check status.
+                  Unlinked issues are ignored.
                 </p>
               </div>
             )}

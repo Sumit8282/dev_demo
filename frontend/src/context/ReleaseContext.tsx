@@ -56,7 +56,7 @@ function createActivity(
 function getCurrentWorkflowStep(release: Release): Release['currentStage'] {
   switch (release.backendWorkflowStatus) {
     case 'VALIDATING':
-      return 'Jira Validation';
+      return 'Scope Agent';
     case 'L3_APPROVAL_PENDING':
       return 'L3 Approval Pending';
     case 'L3_APPROVED':
@@ -123,7 +123,7 @@ function getCurrentWorkflowStep(release: Release): Release['currentStage'] {
     return 'L3 Approval Pending';
   }
   if (release.status === 'PR Request Raised') return 'L3 Approval Pending';
-  if (release.status === 'Validating') return 'Jira Validation';
+  if (release.status === 'Validating') return 'Scope Agent';
   return release.currentStage;
 }
 

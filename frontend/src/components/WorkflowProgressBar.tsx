@@ -17,6 +17,7 @@ interface WorkflowProgressBarProps {
   jiraValidationStatus?: string | null;
   qaValidationStatus?: string | null;
   workflowEvents?: WorkflowEvent[];
+  qaMode?: string;
 }
 
 function useStaggeredValidationCompleted(
@@ -61,16 +62,19 @@ export default function WorkflowProgressBar({
   jiraValidationStatus,
   qaValidationStatus,
   workflowEvents = [],
+  qaMode = '',
 }: WorkflowProgressBarProps) {
+  const skipJira = qaMode === 'github_issues';
   const validationProgress = useMemo(
     () =>
       computeValidationProgress(
         githubValidationStatus,
         jiraValidationStatus,
         qaValidationStatus,
-        workflowEvents
+        workflowEvents,
+        skipJira
       ),
-    [githubValidationStatus, jiraValidationStatus, qaValidationStatus, workflowEvents]
+    [githubValidationStatus, jiraValidationStatus, qaValidationStatus, workflowEvents, skipJira]
   );
 
   const visibleValidationCompleted = useStaggeredValidationCompleted(
@@ -89,6 +93,7 @@ export default function WorkflowProgressBar({
         qaStatus: qaValidationStatus,
         workflowEvents,
         visibleValidationCompleted,
+        skipJira,
       }),
     [
       currentStage,
@@ -98,6 +103,7 @@ export default function WorkflowProgressBar({
       qaValidationStatus,
       workflowEvents,
       visibleValidationCompleted,
+      skipJira,
     ]
   );
 
@@ -107,6 +113,12 @@ export default function WorkflowProgressBar({
       <div className="progress-bar-container">
         {WORKFLOW_STEPS.map((step, index) => {
           const { completed, current, failed, rejected } = stepStates[index];
+          const stepLabel =
+            step === 'Scope Agent'
+              ? skipJira
+                ? 'Scope Agent (GitHub)'
+                : 'Scope Agent (Jira)'
+              : step;
 
           return (
             <div key={step} className="progress-step-wrapper">
@@ -135,7 +147,7 @@ export default function WorkflowProgressBar({
                     <span>{index + 1}</span>
                   )}
                 </div>
-                <span className="step-label">{step}</span>
+                <span className="step-label">{stepLabel}</span>
               </div>
               {index < WORKFLOW_STEPS.length - 1 && (
                 <div className={`progress-connector ${completed ? 'completed' : ''}`} />

@@ -36,6 +36,38 @@ async def test_get_pull_request_maps_404_to_error_payload():
     assert payload == {"error": "Not found"}
 
 
+async def test_get_issue_returns_body_and_skips_404():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/issues/12"):
+            return httpx.Response(
+                200,
+                json={
+                    "number": 12,
+                    "title": "Offering cards",
+                    "body": "## Acceptance criteria\n- [ ] Cards are clickable",
+                },
+            )
+        if request.url.path.endswith("/issues/99"):
+            return httpx.Response(404, text="Not Found")
+        return httpx.Response(404, text="Not Found")
+
+    client = _client(handler)
+    payload = await client.get_issue("acme", "app", 12)
+    assert payload["number"] == 12
+    assert "Cards are clickable" in payload["body"]
+    missing = await client.get_issue("acme", "app", 99)
+    assert missing == {"error": "Not found"}
+
+
+async def test_get_issue_comments_returns_list():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/repos/acme/app/issues/12/comments"
+        return httpx.Response(200, json=[{"body": "Looks good"}])
+
+    comments = await _client(handler).get_issue_comments("acme", "app", 12)
+    assert comments[0]["body"] == "Looks good"
+
+
 async def test_add_pull_request_comment_posts_body():
     seen: dict[str, str] = {}
 

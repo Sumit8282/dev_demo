@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any, TypeVar
 
+from deepagents import create_deep_agent
 from langchain.agents import create_agent
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
@@ -39,6 +40,30 @@ def create_langchain_agent(
     if response_format is not None:
         kwargs["response_format"] = response_format
     return create_agent(**kwargs)
+
+
+def create_qa_deep_agent(
+    *,
+    settings: Any = None,
+    tools: list,
+    system_prompt: str,
+    name: str,
+    response_format: type[BaseModel] | None = None,
+    llm: BaseChatModel | None = None,
+) -> Any | None:
+    """Build a QA Deep Agent, or ``None`` when no chat model is configured."""
+    model = llm or resolve_chat_model(settings)
+    if model is None:
+        return None
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "tools": tools,
+        "system_prompt": system_prompt,
+        "name": name,
+    }
+    if response_format is not None:
+        kwargs["response_format"] = response_format
+    return create_deep_agent(**kwargs)
 
 
 async def invoke_langchain_agent(agent: Any, *, user_message: str) -> str:

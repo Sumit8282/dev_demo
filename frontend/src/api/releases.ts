@@ -147,7 +147,7 @@ export interface BackendReleaseState {
   jira_issue_key: string;
   qa_signoff_required: boolean;
   qa_signoff_not_required_reason: string | null;
-  qa_mode?: 'not_required' | 'upload' | 'pr_tests' | null;
+  qa_mode?: 'not_required' | 'upload' | 'pr_tests' | 'github_issues' | null;
   qa_signoff_attachment: QASignoffAttachmentInfo | null;
   environment: string;
   release_date: string;
@@ -210,7 +210,13 @@ export async function createReleaseApi(
   formData.append('qa_signoff_required', form.qaSignOff === 'No' ? 'false' : 'true');
   formData.append(
     'qa_mode',
-    form.qaSignOff === 'No' ? 'not_required' : form.qaSignOff === 'PrTests' ? 'pr_tests' : 'upload'
+    form.qaSignOff === 'No'
+      ? 'not_required'
+      : form.qaSignOff === 'PrTests'
+        ? 'pr_tests'
+        : form.qaSignOff === 'GhIssues'
+          ? 'github_issues'
+          : 'upload'
   );
   formData.append('environment', form.environment.trim());
   formData.append('release_date', form.releaseDate);

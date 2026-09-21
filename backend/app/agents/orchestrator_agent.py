@@ -14,7 +14,7 @@ from app.agents.tools.orchestrator_tools import (
 )
 from app.agents.workflow_context import WorkflowRunContext
 from app.config import Settings, get_settings
-from app.models.release import OverallValidationStatus, WorkflowStatus
+from app.models.release import OverallValidationStatus, WorkflowStatus, jira_required
 from app.models.validation import (
     GitHubValidationResult,
     JiraValidationResult,
@@ -159,8 +159,9 @@ class ReleaseOrchestratorAgent:
                 "github_comment_posted": posted,
             }
 
-        jira_result = ctx.jira_validation
-        if jira_result is None:
+        skip_jira = not jira_required(ctx.state.get("qa_mode"))
+        jira_result = None if skip_jira else ctx.jira_validation
+        if not skip_jira and jira_result is None:
             ctx.emit(
                 agent=WorkflowEventAgent.ORCHESTRATOR,
                 phase=WorkflowEventPhase.ERROR,
@@ -173,7 +174,10 @@ class ReleaseOrchestratorAgent:
                 "failure_reasons": ["Jira Ticket is not validated."],
             }
 
-        if jira_result.status in (ValidationStatus.FAIL, ValidationStatus.ERROR):
+        if jira_result is not None and jira_result.status in (
+            ValidationStatus.FAIL,
+            ValidationStatus.ERROR,
+        ):
             failure_reasons = jira_result.errors or [
                 "Jira validation could not be completed."
                 if jira_result.status == ValidationStatus.ERROR

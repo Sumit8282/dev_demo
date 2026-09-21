@@ -203,6 +203,11 @@ _SOURCE_EXTENSIONS = (
     ".vue",
     ".html",
     ".json",
+    ".java",
+    ".xml",
+    ".properties",
+    ".yml",
+    ".yaml",
 )
 _SOURCE_SKIP_MARKERS = (
     "/node_modules/",

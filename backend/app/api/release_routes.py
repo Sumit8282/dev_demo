@@ -401,7 +401,8 @@ def _build_initial_state(
     qa_signoff_attachment: dict[str, str | int] | None = None,
 ) -> ReleaseState:
     release_version = extract_release_version(request.release_branch)
-    jira_issue_key = extract_jira_issue_key(str(request.jira_url))
+    jira_url = str(request.jira_url) if request.jira_url else ""
+    jira_issue_key = extract_jira_issue_key(jira_url) if jira_url else ""
     github_owner, github_repo, github_pr_number = extract_github_pr_parts(str(request.github_pr_url))
 
     attachment_state = None
@@ -420,7 +421,7 @@ def _build_initial_state(
         "github_owner": github_owner,
         "github_repo": github_repo,
         "github_pr_number": github_pr_number,
-        "jira_url": str(request.jira_url),
+        "jira_url": jira_url,
         "jira_issue_key": jira_issue_key,
         "qa_signoff_required": request.qa_signoff_required,
         "qa_signoff_not_required_reason": request.qa_signoff_not_required_reason,

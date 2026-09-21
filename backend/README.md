@@ -80,7 +80,9 @@ Copy `.env.example` to `.env` and fill in values:
 | `JIRA_EMAIL` | Atlassian account email |
 | `JIRA_API_TOKEN` | Personal API token (Basic auth) |
 | `JIRA_ALLOWED_RELEASE_STATUSES` | Comma-separated valid statuses |
-| `GITHUB_PERSONAL_ACCESS_TOKEN` | Fine-grained PAT |
+| `GITHUB_ACCOUNT` | `default` or `client` — selects which PAT GitHub clients use |
+| `GITHUB_PERSONAL_ACCESS_TOKEN` | Fine-grained PAT used when `GITHUB_ACCOUNT=default` |
+| `GITHUB_PERSONAL_ACCESS_TOKEN_CLIENT` | Fine-grained PAT used when `GITHUB_ACCOUNT=client` |
 | `GITHUB_MCP_TRANSPORT` | `http` (default) or `stdio` |
 | `GITHUB_MCP_URL` | Remote MCP URL (default `https://api.githubcopilot.com/mcp/`) |
 | `QA_DEV_SIGNOFF_STATUS` | Dev only: `completed` or `missing` |
@@ -103,8 +105,12 @@ The Jira MCP client discovers available tools dynamically and selects the issue 
 ```env
 GITHUB_MCP_TRANSPORT=http
 GITHUB_MCP_URL=https://api.githubcopilot.com/mcp/
+GITHUB_ACCOUNT=default
 GITHUB_PERSONAL_ACCESS_TOKEN=ghp_...
+GITHUB_PERSONAL_ACCESS_TOKEN_CLIENT=
 ```
+
+Set `GITHUB_ACCOUNT=client` to use `GITHUB_PERSONAL_ACCESS_TOKEN_CLIENT` for MCP, PR, Actions, and QA GitHub calls. Restart the backend after changing it.
 
 **Option B – Local Docker stdio**
 

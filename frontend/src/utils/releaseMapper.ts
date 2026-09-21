@@ -1,9 +1,12 @@
 import type { BackendReleaseState } from '../api/releases';
 import { BACKEND_POST_MERGE_STATUSES } from '../api/releases';
-import type { QaCoverageRow, QaGeneratedTestRow, Release, StatusType, WorkflowActivity, WorkflowStep } from '../types/release';
+import type { QaCoverageRow, QaGapReviewUpdate, QaGeneratedTestRow, Release, StatusType, WorkflowActivity, WorkflowStep } from '../types/release';
 import type { WorkflowEvent } from '../types/workflowEvent';
+import { mapGithubIssuesFromState, isGithubIssuesQa } from './githubIssueLinks';
+import { buildFailureNextActions } from './buildFailureGuidance';
 import { formatDate, formatTime } from './helpers';
 import { formatJiraValidationRemarks } from './jiraValidationMessages';
+import { inferValidationFromEvents } from './workflowProgress';
 
 let activityCounter = 0;
 let workflowEventCounter = 0;
@@ -88,6 +91,14 @@ function formatGithubRemarks(
   if (validation.status === 'PASS') return 'GitHub PR validated';
   if (validation.status === 'FAIL') return validation.errors?.join('; ') || 'GitHub PR validation failed';
   return 'GitHub PR validation error';
+}
+
+function formatGithubIssuesScopeRemarks(state: BackendReleaseState): string {
+  const labels = mapGithubIssuesFromState(state).map((issue) => issue.label);
+  if (labels.length) {
+    return `GitHub issues ${labels.join(', ')}`;
+  }
+  return 'GitHub issues used for scope (no Jira ticket)';
 }
 
 function mergeFailureRemarks(state: BackendReleaseState): string {
@@ -303,10 +314,14 @@ function buildWorkflowActivities(state: BackendReleaseState, createdBy: string):
     remarks: 'PR Submitted',
   });
 
-  const githubStatus = state.github_validation?.status;
-  const jiraStatus = state.jira_validation?.status;
-  const qaStatus = state.qa_validation?.status;
+  // Validation results are only persisted when the orchestrator run finishes, so fall back to the
+  // completed events to keep this table in step with the agent activity feed.
+  const inferred = inferValidationFromEvents(state.workflow_events ?? []);
+  const githubStatus = state.github_validation?.status ?? inferred.github ?? undefined;
+  const jiraStatus = state.jira_validation?.status ?? inferred.jira ?? undefined;
+  const qaStatus = state.qa_validation?.status ?? inferred.qa ?? undefined;
   const isValidating = state.workflow_status === 'VALIDATING';
+  const skipJira = isGithubIssuesQa(state.qa_mode);
 
   activities.push({
     id: nextActivityId(),
@@ -332,18 +347,36 @@ function buildWorkflowActivities(state: BackendReleaseState, createdBy: string):
     name: 'Agent',
     soeId: '',
     team: AI_TEAM,
-    activity: 'Jira Validation',
-    status: jiraStatus
-      ? validationToStatus(jiraStatus)
-      : githubStatus && isValidating
-        ? 'Pending'
+    activity: skipJira ? 'Scope Agent (GitHub)' : 'Scope Agent (Jira)',
+    status: skipJira
+      ? githubStatus
+        ? validationToStatus(githubStatus)
         : isValidating
           ? 'Running'
-          : 'Pending',
-    time: jiraStatus ? formatBackendTime(state.updated_at) : '-',
-    remarks: jiraStatus
-      ? formatJiraValidationRemarks(state.jira_validation, state.jira_issue_key)
-      : '-',
+          : 'Pending'
+      : jiraStatus
+        ? validationToStatus(jiraStatus)
+        : githubStatus && isValidating
+          ? 'Pending'
+          : isValidating
+            ? 'Running'
+            : 'Pending',
+    time: skipJira
+      ? githubStatus
+        ? formatBackendTime(state.updated_at)
+        : '-'
+      : jiraStatus
+        ? formatBackendTime(state.updated_at)
+        : '-',
+    remarks: skipJira
+      ? githubStatus === 'PASS'
+        ? formatGithubIssuesScopeRemarks(state)
+        : githubStatus
+          ? formatGithubRemarks(state.github_validation)
+          : '-'
+      : jiraStatus
+        ? formatJiraValidationRemarks(state.jira_validation, state.jira_issue_key)
+        : '-',
   });
 
   activities.push({
@@ -355,12 +388,13 @@ function buildWorkflowActivities(state: BackendReleaseState, createdBy: string):
     activity: 'QA Validation',
     status: qaStatus
       ? validationToStatus(qaStatus)
-      : jiraStatus && isValidating
+      : (jiraStatus || (skipJira && githubStatus === 'PASS')) && isValidating
         ? 'Running'
         : 'Pending',
     time: qaStatus ? formatBackendTime(state.updated_at) : '-',
     remarks: qaStatus
-      ? state.qa_validation?.errors?.join('; ') || 'Validation complete'
+      ? state.qa_validation?.errors?.join('; ') ||
+        (skipJira ? 'QA Validation is completed' : 'Validation complete')
       : '-',
   });
 
@@ -533,6 +567,7 @@ function mapWorkflowStatus(state: BackendReleaseState): {
 function qaMethodLabel(state: BackendReleaseState): string {
   const mode = state.qa_mode;
   if (mode === 'pr_tests') return 'Live Jira + GitHub evidence';
+  if (mode === 'github_issues') return 'Live GitHub issues + evidence';
   if (mode === 'upload') return 'Upload document';
   if (mode === 'not_required' || !state.qa_signoff_required) return 'No';
   return state.qa_signoff_required ? 'Yes' : 'No';
@@ -542,6 +577,34 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+export function mapQaGapReviewUpdates(state: BackendReleaseState): {
+  notes: string;
+  updates: QaGapReviewUpdate[];
+} {
+  const qaMeta = asRecord(state.qa_validation?.metadata);
+  const audit = asRecord(qaMeta?.gap_review);
+  const notes = String(audit?.notes ?? '').trim();
+  const raw = audit?.updates;
+  if (!Array.isArray(raw)) {
+    return { notes, updates: [] };
+  }
+  const updates = raw.flatMap((item) => {
+    const row = asRecord(item);
+    if (!row) return [];
+    return [
+      {
+        acId: String(row.ac_id ?? '').trim(),
+        changed: Boolean(row.changed),
+        beforeCoverage: String(row.before_coverage ?? '').trim(),
+        afterCoverage: String(row.after_coverage ?? '').trim(),
+        beforeTestCases: String(row.before_test_cases ?? '').trim(),
+        afterTestCases: String(row.after_test_cases ?? '').trim(),
+      },
+    ];
+  });
+  return { notes, updates };
 }
 
 export function mapQaCoverageRows(state: BackendReleaseState): QaCoverageRow[] {
@@ -580,6 +643,7 @@ function formatQaSource(
 ): string {
   if (qaMode === 'upload') return 'jira+qa_document';
   if (qaMode === 'pr_tests') return 'jira+github';
+  if (qaMode === 'github_issues') return 'github_issues+github';
   const acSource = String(qaMeta?.ac_source ?? '').trim();
   if (acSource) return `jira+${acSource}`;
   return 'jira';
@@ -696,12 +760,14 @@ export function mapBackendToRelease(
 ): Release {
   const { status, currentStage } = mapWorkflowStatus(state);
   const createdBy = state.created_by?.trim() || createdByFallback;
+  const gapReview = mapQaGapReviewUpdates(state);
 
   return {
     id: state.release_id,
     releaseBranch: state.release_branch,
     pr: state.github_pr_url,
     jira: state.jira_url,
+    githubIssues: mapGithubIssuesFromState(state),
     qaSignOff: qaMethodLabel(state),
     qaReason: state.qa_signoff_not_required_reason ?? '',
     qaSignOffAttachmentName: state.qa_signoff_attachment?.filename ?? '',
@@ -713,6 +779,25 @@ export function mapBackendToRelease(
     createdBy,
     createdDate: formatBackendDate(state.created_at),
     buildId: state.build_result?.build_id ?? '',
+    buildFailureReason:
+      state.workflow_status === 'BUILD_FAILED'
+        ? state.build_result?.failure_reason ||
+          state.failure_reasons?.[0] ||
+          'CI/CD pipeline failed'
+        : undefined,
+    buildJobUrl:
+      state.workflow_status === 'BUILD_FAILED'
+        ? state.build_result?.job_url ?? undefined
+        : undefined,
+    buildNextActions:
+      state.workflow_status === 'BUILD_FAILED'
+        ? buildFailureNextActions(
+            state.build_result?.failure_reason ||
+              state.failure_reasons?.[0] ||
+              'CI/CD pipeline failed',
+            state.build_result?.job_url
+          )
+        : undefined,
     deploymentStatus:
       state.workflow_status === 'DEPLOYMENT_COMPLETED'
         ? 'Deployment Successful'
@@ -729,6 +814,8 @@ export function mapBackendToRelease(
     qaValidationErrors: state.qa_validation?.errors ?? [],
     qaCoverageRows: mapQaCoverageRows(state),
     qaCoveragePercent: mapQaCoveragePercent(state),
+    qaGapReviewUpdates: gapReview.updates,
+    qaGapReviewNotes: gapReview.notes,
     qaGeneratedTests: mapQaGeneratedTests(state),
     qaGeneratedTestsRepo: String(asRecord(state.qa_validation?.metadata)?.generated_tests_repo ?? '').trim(),
     qaGeneratedTestsSha: String(asRecord(state.qa_validation?.metadata)?.generated_tests_sha ?? '').trim(),

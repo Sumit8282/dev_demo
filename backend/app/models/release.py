@@ -44,12 +44,18 @@ class QAMode(str, Enum):
     NOT_REQUIRED = "not_required"
     UPLOAD = "upload"
     PR_TESTS = "pr_tests"
+    GITHUB_ISSUES = "github_issues"
+
+
+def jira_required(qa_mode: str | QAMode | None) -> bool:
+    value = qa_mode.value if isinstance(qa_mode, QAMode) else (qa_mode or "")
+    return value.strip().lower() != QAMode.GITHUB_ISSUES.value
 
 
 class ReleaseRequest(BaseModel):
     release_branch: str = Field(..., min_length=1)
     github_pr_url: HttpUrl
-    jira_url: HttpUrl
+    jira_url: HttpUrl | None = None
     qa_signoff_required: bool
     qa_signoff_not_required_reason: str | None = Field(default=None)
     qa_mode: QAMode | None = None
@@ -81,6 +87,15 @@ class ReleaseRequest(BaseModel):
         stripped = value.strip()
         return stripped or None
 
+    @field_validator("jira_url", mode="before")
+    @classmethod
+    def empty_jira_url(cls, value: object) -> object:
+        if value is None:
+            return None
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
     @model_validator(mode="after")
     def validate_qa_fields(self) -> ReleaseRequest:
         if self.qa_mode is None:
@@ -92,10 +107,16 @@ class ReleaseRequest(BaseModel):
                 raise ValueError(
                     "qa_signoff_not_required_reason is required when QA is not required"
                 )
-        elif self.qa_mode == QAMode.PR_TESTS:
+        elif self.qa_mode in {QAMode.PR_TESTS, QAMode.GITHUB_ISSUES}:
             self.qa_signoff_required = True
         else:
             self.qa_signoff_required = True
+
+        if self.qa_mode == QAMode.GITHUB_ISSUES:
+            if self.jira_url is None:
+                return self
+        elif self.jira_url is None:
+            raise ValueError("jira_url is required unless QA mode is github_issues")
         return self
 
 

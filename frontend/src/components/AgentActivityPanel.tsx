@@ -7,6 +7,7 @@ interface AgentActivityPanelProps {
   environment: string;
   jiraIssueKey: string;
   events: WorkflowEvent[];
+  qaMode?: string;
 }
 
 export default function AgentActivityPanel({
@@ -14,6 +15,7 @@ export default function AgentActivityPanel({
   environment,
   jiraIssueKey,
   events,
+  qaMode = '',
 }: AgentActivityPanelProps) {
   const [expanded, setExpanded] = useState(true);
   const feedRef = useRef<HTMLDivElement>(null);
@@ -38,6 +40,7 @@ export default function AgentActivityPanel({
             environment={environment}
             jiraIssueKey={jiraIssueKey}
             events={events}
+            qaMode={qaMode}
             scrollContainerRef={feedRef}
           />
         </div>

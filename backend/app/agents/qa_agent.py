@@ -8,14 +8,16 @@ from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
-from app.agents.llm_runner import create_langchain_agent, invoke_structured_agent
+from app.agents.llm_runner import create_qa_deep_agent, invoke_structured_agent
 from app.agents.tools.mcp_tools import build_jira_mcp_tools
 from app.config import Settings, get_settings
 from app.mcp.jira_mcp import JiraMCPClient
 from app.models.qa_llm_validation import (
     QAAcceptanceCriteriaExtract,
     QAAcceptanceCriterion,
+    QACoverageMatrixRow,
     QADraftTestBundle,
+    QAGapReviewBundle,
     QAGeneratedTest,
     QAGeneratedTestBundle,
     QALLMValidationOutput,
@@ -29,11 +31,17 @@ from app.services.qa_coverage_evaluator import (
     apply_coverage_constraints,
     extract_test_cases_from_text,
     format_signoff_facts,
+    gap_review_audit,
     merge_test_cases,
+    overlay_gap_review_rows,
+    select_gap_review_rows,
+    tag_gap_review_evidence,
     normalize_test_result,
 )
 from app.services.generated_test_runner import GeneratedTestRunner
 from app.services.generated_test_source import build_generated_test_code
+from app.services.github_issue_acs import collect_github_issue_acceptance_criteria
+from app.services.github_pr_client import GitHubPRClient
 from app.services.github_repo_evidence import GitHubRepoEvidenceClient
 from app.services.qa_pr_test_gate import (
     build_pr_test_document,
@@ -43,7 +51,6 @@ from app.services.qa_pr_test_gate import (
     extract_pr_testing_writeup,
     format_generated_test_repo_context,
     format_lane2_comment,
-    merge_test_files,
     uncovered_acceptance_criteria,
 )
 from app.services.qa_signoff_service import QASignoffService, get_qa_signoff_service
@@ -59,11 +66,13 @@ class QAAgent:
         jira_client: JiraMCPClient | None = None,
         repo_evidence_client: GitHubRepoEvidenceClient | None = None,
         generated_test_runner: GeneratedTestRunner | None = None,
+        github_pr_client: GitHubPRClient | None = None,
     ) -> None:
         self.settings = settings or get_settings()
         self.signoff_service = signoff_service or get_qa_signoff_service()
         self._jira_client = jira_client
         self._repo_evidence_client = repo_evidence_client
+        self._github_pr_client = github_pr_client
         self._generated_test_runner = generated_test_runner or GeneratedTestRunner(
             settings=self.settings
         )
@@ -110,6 +119,17 @@ class QAAgent:
                 pr_title=pr_title,
                 jira_issue_key=jira_issue_key,
                 jira_validation=jira_validation,
+                github_validation=github_validation,
+            )
+
+        if resolved_mode == "github_issues":
+            return await self._validate_github_issues(
+                release_id=release_id,
+                environment=environment,
+                release_version=release_version,
+                qa_signoff_required=qa_signoff_required,
+                pr_title=pr_title,
+                jira_issue_key=jira_issue_key,
                 github_validation=github_validation,
             )
 
@@ -272,7 +292,15 @@ class QAAgent:
             acceptance_criteria=extracted_acs,
             test_cases=extracted_tests,
             signoff=signoff,
-            )
+        )
+        llm_result = await self._apply_one_gap_review(
+            llm_result,
+            acceptance_criteria=extracted_acs,
+            test_cases=extracted_tests,
+            signoff=signoff,
+            metadata=metadata,
+            jira_issue_key=jira_issue_key,
+        )
 
         result = _to_qa_validation_result(
             llm_result,
@@ -304,6 +332,113 @@ class QAAgent:
         jira_validation: Any | None,
         github_validation: Any | None,
     ) -> QAValidationResult:
+        return await self._run_lane1_coverage(
+            release_id=release_id,
+            environment=environment,
+            release_version=release_version,
+            qa_signoff_required=qa_signoff_required,
+            pr_title=pr_title,
+            jira_issue_key=jira_issue_key,
+            jira_validation=jira_validation,
+            github_validation=github_validation,
+            qa_mode="pr_tests",
+        )
+
+    async def _validate_github_issues(
+        self,
+        *,
+        release_id: str,
+        environment: str,
+        release_version: str,
+        qa_signoff_required: bool,
+        pr_title: str | None,
+        jira_issue_key: str | None,
+        github_validation: Any | None,
+    ) -> QAValidationResult:
+        collected = await self._prefetch_github_issue_acceptance_criteria(github_validation)
+        refs = list(collected.get("refs") or [])
+        fetched = list(collected.get("fetched") or [])
+        criteria = list(collected.get("criteria") or [])
+        extra = {
+            "ac_source": "github_issues",
+            "github_issue_numbers": list(collected.get("github_issue_numbers") or []),
+            "github_issues_fetched": fetched,
+        }
+        if not refs:
+            return QAValidationResult(
+                status=ValidationStatus.FAIL,
+                checks=QAChecks(signoff_required=True, signoff_completed=False),
+                errors=["No GitHub issues linked from the PR."],
+                metadata={
+                    "environment": environment,
+                    "release_version": release_version,
+                    "qa_mode": "github_issues",
+                    "qa_lane": 1,
+                    **extra,
+                },
+            )
+        if not fetched:
+            return QAValidationResult(
+                status=ValidationStatus.FAIL,
+                checks=QAChecks(signoff_required=True, signoff_completed=False),
+                errors=[
+                    "Linked GitHub issues could not be fetched or were pull requests."
+                ],
+                metadata={
+                    "environment": environment,
+                    "release_version": release_version,
+                    "qa_mode": "github_issues",
+                    "qa_lane": 1,
+                    **extra,
+                },
+            )
+        return await self._run_lane1_coverage(
+            release_id=release_id,
+            environment=environment,
+            release_version=release_version,
+            qa_signoff_required=qa_signoff_required,
+            pr_title=pr_title,
+            jira_issue_key=jira_issue_key,
+            jira_validation=None,
+            github_validation=github_validation,
+            qa_mode="github_issues",
+            provided_criteria=criteria,
+            extra_metadata=extra,
+        )
+
+    async def _prefetch_github_issue_acceptance_criteria(
+        self,
+        github_validation: Any | None,
+    ) -> dict[str, Any]:
+        client = self._github_pr_client
+        owns_client = False
+        if client is None:
+            client = GitHubPRClient(settings=self.settings)
+            owns_client = True
+        try:
+            return await collect_github_issue_acceptance_criteria(github_validation, client)
+        except Exception as exc:
+            logger.warning("[QA_AGENT] GitHub issue AC collection failed: %s", exc)
+            return {"refs": [], "fetched": [], "criteria": [], "github_issue_numbers": []}
+        finally:
+            if owns_client:
+                await client.aclose()
+
+    async def _run_lane1_coverage(
+        self,
+        *,
+        release_id: str,
+        environment: str,
+        release_version: str,
+        qa_signoff_required: bool,
+        pr_title: str | None,
+        jira_issue_key: str | None,
+        jira_validation: Any | None,
+        github_validation: Any | None,
+        qa_mode: str,
+        provided_criteria: list[QAAcceptanceCriterion] | None = None,
+        extra_metadata: dict[str, Any] | None = None,
+    ) -> QAValidationResult:
         checks = QAChecks(signoff_required=True, signoff_completed=False)
         github_meta = extract_github_metadata(github_validation)
         head_sha = str(github_meta.get("head_sha") or "")
@@ -312,7 +447,6 @@ class QAAgent:
         repo_evidence = await self._collect_repo_evidence(github_validation)
         repo_test_files = list(repo_evidence.get("repo_test_files") or [])
         ci_status = str(repo_evidence.get("ci_status") or "")
-        test_files = merge_test_files(pr_test_files, repo_test_files)
         qa_document_text = build_pr_test_document(
             pr_test_files,
             head_sha=head_sha,
@@ -326,7 +460,7 @@ class QAAgent:
             "expected_pr_title": pr_title or "",
             "jira_issue_key": jira_issue_key or "",
             "hybrid_pipeline": True,
-            "qa_mode": "pr_tests",
+            "qa_mode": qa_mode,
             "qa_lane": 1,
             "head_sha": head_sha,
             "pr_test_files": [item["filename"] for item in pr_test_files],
@@ -337,9 +471,12 @@ class QAAgent:
             "ci_status": ci_status,
             "qa_document_text_length": len(qa_document_text),
         }
+        if extra_metadata:
+            metadata.update(extra_metadata)
         logger.info(
-            "[QA_AGENT] Lane 1 real-data gate for %s sha=%s pr_tests=%d repo_tests=%d writeup=%s ci=%s",
+            "[QA_AGENT] Lane 1 real-data gate for %s mode=%s sha=%s pr_tests=%d repo_tests=%d writeup=%s ci=%s",
             release_id,
+            qa_mode,
             head_sha or "(none)",
             len(pr_test_files),
             len(repo_test_files),
@@ -367,36 +504,46 @@ class QAAgent:
                 metadata=metadata,
             )
 
-        jira_description, jira_comments, acceptance_criteria = _extract_jira_context(
-            jira_validation
-        )
-        if not acceptance_criteria and jira_issue_key:
-            fetched_description, fetched_comments, fetched_acs = (
-                await self._prefetch_jira_acceptance_criteria(jira_issue_key)
+        if provided_criteria is None:
+            jira_description, jira_comments, acceptance_criteria = _extract_jira_context(
+                jira_validation
             )
-            acceptance_criteria = fetched_acs
-            jira_description = jira_description or fetched_description
-            jira_comments = jira_comments or fetched_comments
-
-        ac_resolution, tc_extract = await asyncio.gather(
-            self._resolve_acceptance_criteria(
-                provided=acceptance_criteria,
-                jira_issue_key=jira_issue_key,
-                jira_description=jira_description,
-                jira_comments=jira_comments,
-            ),
-            self._extract_test_cases(
+            if not acceptance_criteria and jira_issue_key:
+                fetched_description, fetched_comments, fetched_acs = (
+                    await self._prefetch_jira_acceptance_criteria(jira_issue_key)
+                )
+                acceptance_criteria = fetched_acs
+                jira_description = jira_description or fetched_description
+                jira_comments = jira_comments or fetched_comments
+            ac_resolution, tc_extract = await asyncio.gather(
+                self._resolve_acceptance_criteria(
+                    provided=acceptance_criteria,
+                    jira_issue_key=jira_issue_key,
+                    jira_description=jira_description,
+                    jira_comments=jira_comments,
+                ),
+                self._extract_test_cases(
+                    agent=tc_agent,
+                    attachment_filename="pr-tests",
+                    qa_document_text=qa_document_text,
+                ),
+            )
+            if ac_resolution is None:
+                return QAValidationResult(
+                    status=ValidationStatus.ERROR,
+                    checks=checks,
+                    errors=["QA AC extract agent did not return structured acceptance criteria."],
+                    metadata=metadata,
+                )
+            extracted_acs, ac_source = ac_resolution
+            metadata["ac_source"] = ac_source
+        else:
+            extracted_acs = provided_criteria
+            metadata.setdefault("ac_source", "github_issues")
+            tc_extract = await self._extract_test_cases(
                 agent=tc_agent,
                 attachment_filename="pr-tests",
                 qa_document_text=qa_document_text,
-            ),
-        )
-        if ac_resolution is None:
-            return QAValidationResult(
-                status=ValidationStatus.ERROR,
-                checks=checks,
-                errors=["QA AC extract agent did not return structured acceptance criteria."],
-                metadata=metadata,
             )
         if tc_extract is None:
             return QAValidationResult(
@@ -406,12 +553,10 @@ class QAAgent:
                 metadata=metadata,
             )
 
-        extracted_acs, ac_source = ac_resolution
         extracted_tests = merge_test_cases(
             extract_test_cases_from_text(qa_document_text),
             tc_extract.test_cases,
         )
-        metadata["ac_source"] = ac_source
         metadata["extracted_test_case_count"] = len(extracted_tests)
 
         llm_result = await self._map_coverage(
@@ -440,6 +585,14 @@ class QAAgent:
             acceptance_criteria=extracted_acs,
             test_cases=extracted_tests,
             signoff=None,
+        )
+        llm_result = await self._apply_one_gap_review(
+            llm_result,
+            acceptance_criteria=extracted_acs,
+            test_cases=extracted_tests,
+            signoff=None,
+            metadata=metadata,
+            jira_issue_key=jira_issue_key,
         )
         if ci_status.lower() == "failure":
             llm_result.status = ValidationStatus.FAIL
@@ -768,6 +921,97 @@ class QAAgent:
             response_model=QALLMValidationOutput,
         )
 
+    async def _apply_one_gap_review(
+        self,
+        llm_result: QALLMValidationOutput,
+        *,
+        acceptance_criteria: list[QAAcceptanceCriterion],
+        test_cases: list[QATestCase],
+        signoff: SignOffRequest | None,
+        metadata: dict[str, Any],
+        jira_issue_key: str | None,
+    ) -> QALLMValidationOutput:
+        """Remap gap rows once, constrain again, then stop."""
+        gaps = select_gap_review_rows(llm_result.coverage_matrix)
+        audit: dict[str, Any] = {
+            "ran": False,
+            "stopped": True,
+            "attempted_ac_ids": [row.ac_id for row in gaps],
+            "updates": [],
+            "notes": "",
+            "skipped_reason": "",
+        }
+        if not gaps:
+            audit["skipped_reason"] = "no_gaps"
+            metadata["gap_review"] = audit
+            return llm_result
+
+        agent = self.build_gap_review_agent()
+        if agent is None:
+            audit["skipped_reason"] = "agent_unavailable"
+            metadata["gap_review"] = audit
+            return llm_result
+
+        before = [row.model_copy(deep=True) for row in llm_result.coverage_matrix]
+        reviewed = await self._run_gap_review(
+            agent=agent,
+            gaps=gaps,
+            test_cases=test_cases,
+            jira_issue_key=jira_issue_key,
+        )
+        audit["ran"] = True
+        if reviewed is None:
+            audit["skipped_reason"] = "no_structured_response"
+            metadata["gap_review"] = audit
+            logger.info("[QA_AGENT] Gap review returned no structured response; stopping")
+            return llm_result
+
+        audit["notes"] = reviewed.review_notes
+        llm_result.coverage_matrix = overlay_gap_review_rows(
+            llm_result.coverage_matrix,
+            reviewed.coverage_matrix,
+        )
+        llm_result = apply_coverage_constraints(
+            llm_result,
+            acceptance_criteria=acceptance_criteria,
+            test_cases=test_cases,
+            signoff=signoff,
+        )
+        audit["updates"] = gap_review_audit(before, llm_result.coverage_matrix)
+        changed_ids = {
+            str(item["ac_id"])
+            for item in audit["updates"]
+            if item.get("changed")
+        }
+        tag_gap_review_evidence(llm_result.coverage_matrix, changed_ids)
+        metadata["gap_review"] = audit
+        logger.info(
+            "[QA_AGENT] Gap review stopped after one pass attempted=%s changed=%s",
+            audit["attempted_ac_ids"],
+            sorted(changed_ids),
+        )
+        return llm_result
+
+    async def _run_gap_review(
+        self,
+        *,
+        agent: Any,
+        gaps: list[QACoverageMatrixRow],
+        test_cases: list[QATestCase],
+        jira_issue_key: str | None,
+    ) -> QAGapReviewBundle | None:
+        user_message = format_prompt(
+            "qa_gap_review_user",
+            jira_issue_key=(jira_issue_key or "").strip() or "(not provided)",
+            gap_rows=_format_gap_rows(gaps),
+            test_cases=_format_test_cases(test_cases),
+        )
+        return await invoke_structured_agent(
+            agent,
+            user_message=user_message,
+            response_model=QAGapReviewBundle,
+        )
+
     async def _prefetch_jira_acceptance_criteria(
         self,
         issue_key: str,
@@ -809,7 +1053,7 @@ class QAAgent:
         return build_jira_mcp_tools(self._jira_client)
 
     def build_ac_extract_agent(self, llm: BaseChatModel | None = None):
-        return create_langchain_agent(
+        return create_qa_deep_agent(
             settings=self.settings,
             tools=self.get_mcp_tools(),
             system_prompt=load_prompt("qa_ac_extract_system"),
@@ -819,7 +1063,7 @@ class QAAgent:
         )
 
     def build_tc_extract_agent(self, llm: BaseChatModel | None = None):
-        return create_langchain_agent(
+        return create_qa_deep_agent(
             settings=self.settings,
             tools=[],
             system_prompt=load_prompt("qa_tc_extract_system"),
@@ -829,7 +1073,7 @@ class QAAgent:
         )
 
     def build_langchain_agent(self, llm: BaseChatModel | None = None):
-        return create_langchain_agent(
+        return create_qa_deep_agent(
             settings=self.settings,
             tools=[],
             system_prompt=load_prompt("qa_agent_system"),
@@ -838,8 +1082,18 @@ class QAAgent:
             llm=llm,
         )
 
+    def build_gap_review_agent(self, llm: BaseChatModel | None = None):
+        return create_qa_deep_agent(
+            settings=self.settings,
+            tools=[],
+            system_prompt=load_prompt("qa_gap_review_system"),
+            name="qa_gap_review_agent",
+            response_format=QAGapReviewBundle,
+            llm=llm,
+        )
+
     def build_lane2_draft_agent(self, llm: BaseChatModel | None = None):
-        return create_langchain_agent(
+        return create_qa_deep_agent(
             settings=self.settings,
             tools=[],
             system_prompt=load_prompt("qa_lane2_draft_system"),
@@ -849,7 +1103,7 @@ class QAAgent:
         )
 
     def build_generated_test_agent(self, llm: BaseChatModel | None = None):
-        return create_langchain_agent(
+        return create_qa_deep_agent(
             settings=self.settings,
             tools=[],
             system_prompt=load_prompt("qa_generated_test_system"),
@@ -983,6 +1237,19 @@ def _unique_criteria(items: list[str]) -> list[str]:
         seen.add(key)
         unique.append(text)
     return unique
+
+
+def _format_gap_rows(rows: list[QACoverageMatrixRow]) -> str:
+    if not rows:
+        return "No gap rows."
+    lines: list[str] = []
+    for row in rows:
+        lines.append(f"- {row.ac_id}: {row.acceptance_criterion}")
+        lines.append(f"  Current coverage: {row.coverage}")
+        lines.append(f"  Mapped tests: {row.test_cases or '(none)'}")
+        lines.append(f"  Test result: {row.test_result or '(none)'}")
+        lines.append(f"  Evidence: {row.evidence_reason or '(none)'}")
+    return "\n".join(lines)
 
 
 def _format_acceptance_criteria(criteria: list[QAAcceptanceCriterion]) -> str:

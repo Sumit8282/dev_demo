@@ -107,6 +107,10 @@ class Settings(BaseSettings):
     )
 
     qa_dev_signoff_status: str = Field(default="", alias="QA_DEV_SIGNOFF_STATUS")
+    qa_workflow: Literal["default", "barko_agent"] = Field(
+        default="default",
+        alias="QA_WORKFLOW",
+    )
 
     release_database_path: str = Field(
         default="",

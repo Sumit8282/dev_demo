@@ -14,7 +14,7 @@ from app.agents.build_agent import BuildAgent
 from app.models.build_result import BuildStatus
 from app.agents.l3_agent import L3Agent
 from app.agents.merge_agent import MergeAgent
-from app.agents.qa_agent import QAAgent
+from app.agents.qa_factory import QAValidator, create_qa_agent
 from app.agents.rm_agent import RMAgent
 from app.agents.workflow_context import WorkflowRunContext
 from app.mcp.client_base import MCPConnectionError, MCPToolNotFoundError
@@ -68,7 +68,7 @@ class Orchestrator:
     def __init__(
         self,
         jira_agent: JiraAgent | None = None,
-        qa_agent: QAAgent | None = None,
+        qa_agent: QAValidator | None = None,
         l3_agent: L3Agent | None = None,
         build_agent: BuildAgent | None = None,
         rm_agent: RMAgent | None = None,
@@ -78,7 +78,7 @@ class Orchestrator:
     ) -> None:
         self._github_client = github_client
         self.jira_agent = jira_agent or JiraAgent()
-        self.qa_agent = qa_agent or QAAgent()
+        self.qa_agent = qa_agent or create_qa_agent()
         self.l3_agent = l3_agent or L3Agent()
         self.build_agent = build_agent or BuildAgent()
         self.rm_agent = rm_agent or RMAgent()
